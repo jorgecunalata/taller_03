@@ -154,7 +154,7 @@ def _record_evidence(requirement_id: str, chunk_key: str, cita: str) -> dict:
             "SELECT COUNT(*) FROM evidence_log WHERE requirement_id = ?",
             (requirement_id,),
         ).fetchone()[0]
-        return {"ok": True, "requirement_id": requirement_id, "stored": n}
+        return {"ok": True, "requirement_id": requirement_id, "chunk_key": chunk_key, "stored": n}
     finally:
         conn.close()
 

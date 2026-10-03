@@ -78,6 +78,7 @@ def test_mcp_cuatro_tools_y_n_mas_uno():
         {"requirement_id": "R-001", "chunk_key": "k", "cita": "x"},
     )
     assert ev["stored"] == ev2["stored"] == 1
+    assert ev["chunk_key"] == "k"
     rag = cli.invocar("retrieve_knowledge", {"query": "irrevocable tiempo real", "scope": "docs", "k": 3})
     assert rag["hits"]
     assert all("kb_status" in h for h in rag["hits"])
@@ -107,6 +108,6 @@ def test_grafo_cinco_roles():
     nodos = [t.get("nodo") for t in out["trace"]]
     for rol in ("planner", "reader", "writer", "verifier", "synthesizer"):
         assert rol in nodos
-    assert out["status"] in {"completed", "max_steps_reached", "rejected_insufficient_evidence"}
+    assert out["status"] == "completed"
     tools = wf.cliente.descubrir()
     assert len(tools) >= 4

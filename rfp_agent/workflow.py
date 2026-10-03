@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from rfp_agent.config import MAX_PASOS, RUNS_DB
+from rfp_agent.config import MAX_PASOS
 from rfp_agent.db import SCHEMA_RUNS, connect_runs, ensure_loaded, get_item
 from rfp_agent.graph import compile_graph
 from rfp_agent.llm import backend_usado

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 from rfp_agent.config import ABSTENCION, OUT
 from rfp_agent.db import connect_rfp, ensure_loaded, list_golden

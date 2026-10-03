@@ -18,15 +18,21 @@ No hay UI, LangSmith, ni `create_agent` / `create_react_agent`.
 Python ≥ 3.11.
 
 ```bash
+python3 -m pip install -e ".[dev]"
+cp .env.example .env
+python3 -m rfp_agent.cli load-db
+python3 -m rfp_agent.cli tools
+python3 -m rfp_agent.cli run R-001
+python3 -m rfp_agent.cli eval-rfp
+python3 -m pytest -q
+```
+
+Si tienes `venv`:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env
-python -m rfp_agent.cli load-db
-python -m rfp_agent.cli tools
-python -m rfp_agent.cli run R-001
-python -m rfp_agent.cli eval-rfp
-pytest -q
 ```
 
 `eval-rfp` escribe `outputs/eval_rfp.json` y sale con código 1 si algún golden falla.

@@ -210,11 +210,27 @@ class SimulatedLLM:
 
         if role == "writer":
             evidence = _parse_evidence_from_user(user)
+            recorded_keys = set()
+            for m in mensajes:
+                for tc in m.get("tool_calls") or []:
+                    if (tc.get("function") or {}).get("name") != "record_evidence":
+                        continue
+                    raw = (tc.get("function") or {}).get("arguments") or "{}"
+                    try:
+                        recorded_keys.add(json.loads(raw).get("chunk_key"))
+                    except json.JSONDecodeError:
+                        continue
+                if m.get("role") == "tool":
+                    try:
+                        body = json.loads(m.get("content") or "{}")
+                    except json.JSONDecodeError:
+                        body = {}
+                    if isinstance(body, dict) and body.get("chunk_key"):
+                        recorded_keys.add(body["chunk_key"])
             if "record_evidence" in names:
-                already = json.dumps(obs, ensure_ascii=False)
                 pending = [
                     ev for ev in evidence
-                    if ev.get("chunk_key") and ev["chunk_key"] not in already
+                    if ev.get("chunk_key") and ev["chunk_key"] not in recorded_keys
                 ]
                 if pending:
                     calls = []
