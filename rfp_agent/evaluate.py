@@ -62,10 +62,16 @@ def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
 
 def eval_rfp(ids: list[str] | None = None, workflow: RfpWorkflow | None = None) -> dict:
     ensure_loaded()
+    from rfp_agent.config import FORBIDDEN_GOLDEN_IDS, GOLDEN_IDS
+
     golden = list_golden()
     if ids:
-        wanted = set(ids)
+        wanted = {i for i in ids if i not in FORBIDDEN_GOLDEN_IDS}
         golden = [g for g in golden if g["id"] in wanted]
+    else:
+        golden = [g for g in golden if g["id"] in GOLDEN_IDS]
+    # Nunca evaluar R-018 / fuera del slice.
+    golden = [g for g in golden if g["id"] in GOLDEN_IDS and g["id"] not in FORBIDDEN_GOLDEN_IDS]
     wf = workflow or RfpWorkflow()
     conn = connect_rfp()
     resultados = []

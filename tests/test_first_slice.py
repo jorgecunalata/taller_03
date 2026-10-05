@@ -120,11 +120,60 @@ def test_grafo_cinco_roles():
 
 def test_sin_r018_en_golden_config():
     from rfp_agent import db as db_mod
-    from rfp_agent.config import GOLDEN_IDS
+    from rfp_agent.config import FORBIDDEN_GOLDEN_IDS, GOLDEN_IDS
 
     assert "R-018" not in GOLDEN_IDS
+    assert "R-018" in FORBIDDEN_GOLDEN_IDS
     assert all(g["id"] != "R-018" for g in db_mod.GOLDEN_ROWS)
     assert all(f["req_id"] != "R-018" for f in db_mod.FACTS_ROWS)
+
+
+def test_purge_r018_from_sqlite():
+    """Aunque alguien inserte R-018 a mano, ensure_loaded / load-db lo borra."""
+    from rfp_agent.config import GOLDEN_IDS
+    from rfp_agent.db import connect_rfp, ensure_loaded, load_rfp
+
+    conn = connect_rfp()
+    conn.execute(
+        "INSERT OR REPLACE INTO rfp_items (id, texto, excel_row, in_golden) VALUES (?,?,?,1)",
+        ("R-018", "SWIFT placeholder", 19),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO golden (id, respondible, sql_verificacion, notas) VALUES (?,?,?,?)",
+        ("R-018", 1, "SELECT 1", "bogus"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO facts (id, req_id, statement, source_doc, locator, kb_status) "
+        "VALUES (?,?,?,?,?,?)",
+        ("F-018", "R-018", "<exact phrase copied from the PDF>", "x", "p.0", "VALIDADO"),
+    )
+    conn.commit()
+    conn.close()
+
+    ensure_loaded()
+    conn = connect_rfp()
+    ids = [r[0] for r in conn.execute("SELECT id FROM golden").fetchall()]
+    facts_018 = conn.execute("SELECT COUNT(*) FROM facts WHERE req_id='R-018'").fetchone()[0]
+    conn.close()
+    assert "R-018" not in ids
+    assert facts_018 == 0
+    assert set(ids) == set(GOLDEN_IDS)
+
+    info = load_rfp()
+    assert info["golden"] == 3
+    assert "R-018" not in info["golden_ids"]
+
+
+def test_reader_cierra_sin_quemar_pasos():
+    wf = RfpWorkflow()
+    out = wf.run("R-001")
+    nodos = [t.get("nodo") for t in out["trace"]]
+    assert "cerrar_rol" in nodos or "writer" in nodos
+    assert out["status"] == "completed"
+    assert "liquidación de fondos final e irrevocable en tiempo real" in out["answer"].lower()
+    assert out["pasos"] < out["max_pasos"]
+    # No debe quedarse atrapado en reader hasta tope.
+    assert "tope" not in nodos
 
 
 def test_normalize_assistant_thinking_and_embedded_tools():

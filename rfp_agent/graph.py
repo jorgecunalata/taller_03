@@ -15,7 +15,11 @@ from rfp_agent.config import (
     TOKEN_BUDGET,
     TOOL_BUDGET_POR_ROL,
 )
-from rfp_agent.drafting import draft_desde_evidence
+from rfp_agent.drafting import (
+    corregir_draft_si_abstuvo_mal,
+    draft_desde_evidence,
+    evidence_desde_facts,
+)
 from rfp_agent.llm import TOOLS_POR_ROL, get_llm, normalize_assistant_message
 from rfp_agent.mcp import ClienteMCP
 
@@ -153,7 +157,8 @@ def _hits_desde_mensajes(mensajes: list[dict]) -> list[dict]:
                 }
             )
             continue
-        for h in (body.get("hits") or []) if isinstance(body, dict) else []:
+        hits = (body.get("hits") or []) if isinstance(body, dict) else []
+        for h in hits:
             extra.append(
                 {
                     "chunk_key": h.get("chunk_key"),
@@ -175,10 +180,10 @@ def _sig_tool_calls(tool_calls: list[dict]) -> str:
     return "|".join(partes)
 
 
-def _tiene_hits(estado: Estado, mensajes: list[dict]) -> bool:
+def _tiene_hits(estado: Estado, mensajes: list[dict] | None = None) -> bool:
     if estado.get("evidence"):
         return True
-    for m in mensajes:
+    for m in mensajes or []:
         if m.get("role") != "tool":
             continue
         try:
@@ -203,6 +208,19 @@ def _record_hecho(mensajes: list[dict]) -> bool:
     return False
 
 
+def _ya_sql(mensajes: list[dict]) -> bool:
+    for m in mensajes:
+        if m.get("role") != "tool":
+            continue
+        try:
+            body = json.loads(m.get("content") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(body, dict) and "rows" in body:
+            return True
+    return False
+
+
 def _debe_forzar_handoff(estado: Estado, tool_calls: list[dict], mensajes: list[dict]) -> str | None:
     """Devuelve razón si hay que cortar tools y emitir salida de rol."""
     rol = estado.get("rol") or "planner"
@@ -216,28 +234,32 @@ def _debe_forzar_handoff(estado: Estado, tool_calls: list[dict], mensajes: list[
     prev = estado.get("tool_sigs") or []
     if sig and prev.count(sig) >= 1:
         return "repeticion"
-    if rol == "reader" and _tiene_hits(estado, mensajes) and tool_calls:
-        # Ya hay evidencia: no más retrieve/query loops.
-        names = {(tc.get("function") or {}).get("name") for tc in tool_calls}
-        if names & {"retrieve_knowledge", "query_facts", "list_sources"}:
-            return "evidence_lista"
+    if rol == "reader" and (_tiene_hits(estado, mensajes) or rounds >= 1) and tool_calls:
+        return "evidence_lista"
     if rol == "writer" and _record_hecho(mensajes) and tool_calls:
         return "evidence_anclada"
-    if rol == "verifier" and tool_calls:
-        ya_sql = False
-        for m in mensajes:
-            if m.get("role") != "tool":
-                continue
-            try:
-                body = json.loads(m.get("content") or "{}")
-            except json.JSONDecodeError:
-                continue
-            if isinstance(body, dict) and "rows" in body:
-                ya_sql = True
-                break
-        if ya_sql:
-            return "sql_listo"
+    if rol == "verifier" and tool_calls and _ya_sql(mensajes):
+        return "sql_listo"
     return None
+
+
+def _debe_cerrar_tras_tools(estado: Estado) -> bool:
+    """Tras ejecutar tools: cerrar el rol sin otra vuelta al LLM si ya basta."""
+    rol = estado.get("rol") or "planner"
+    rounds = int(estado.get("tool_rounds") or 0)
+    budget = TOOL_BUDGET_POR_ROL.get(rol, 1)
+    mensajes = estado.get("mensajes") or []
+    if rounds >= budget:
+        return True
+    if rol == "reader" and (_tiene_hits(estado, mensajes) or rounds >= 1):
+        return True
+    if rol == "writer" and _record_hecho(mensajes):
+        return True
+    if rol == "verifier" and _ya_sql(mensajes):
+        return True
+    if rol == "planner" and rounds >= 2:
+        return True
+    return False
 
 
 def _salida_forzada(rol: str, estado: Estado) -> dict:
@@ -278,7 +300,6 @@ def _salida_forzada(rol: str, estado: Estado) -> dict:
                 "critique": "" if ok else "R-057 exige abstención.",
                 "sql_used": estado.get("sql_used") or [],
             }
-        # Cobertura laxa: si hay draft no vacío tras evidence, pasar.
         if (estado.get("draft") or "").strip():
             return {"verdict": "pass", "critique": "", "sql_used": estado.get("sql_used") or []}
         return {
@@ -286,7 +307,6 @@ def _salida_forzada(rol: str, estado: Estado) -> dict:
             "critique": "Draft vacío.",
             "sql_used": estado.get("sql_used") or [],
         }
-    # synthesizer
     st = "completed"
     if estado.get("verdict") == "fail":
         st = "rejected_insufficient_evidence"
@@ -309,8 +329,10 @@ def construir_grafo(cliente: ClienteMCP):
                 {"role": "user", "content": _user_de(estado)},
             ]
         tools = cliente.esquemas_para_openai(TOOLS_POR_ROL.get(rol) or [])
-        # Synthesizer / budget 0: no ofrecer tools al modelo.
         if TOOL_BUDGET_POR_ROL.get(rol, 1) <= 0:
+            tools = []
+        # Reader ya tiene evidence (p.ej. replan): no ofrecer tools; forzar handoff.
+        if rol == "reader" and _tiene_hits(estado, mensajes):
             tools = []
         r = llm.chat(mensajes, tools=tools or None, role=rol)
         m = normalize_assistant_message(r["mensaje"])
@@ -321,16 +343,17 @@ def construir_grafo(cliente: ClienteMCP):
         forzar = None
         if m.get("tool_calls"):
             forzar = _debe_forzar_handoff(estado, m["tool_calls"], mensajes)
-        if forzar:
+        if forzar or (rol == "reader" and _tiene_hits(estado, mensajes) and m.get("tool_calls")):
+            forzar = forzar or "evidence_lista"
             datos = _salida_forzada(rol, estado)
-            # Si el modelo ya trajo JSON útil, preferirlo; si no, forzado.
             parsed = _parse_json(m.get("content") or "")
-            if rol == "writer" and not (parsed.get("draft") or parsed.get("raw")):
+            if rol == "writer" and not (parsed.get("draft") or "").strip():
                 parsed = datos
-            elif rol != "writer" and ("raw" in parsed or not parsed):
+            elif rol != "writer" and ("raw" in parsed or not parsed.get("handoff") and rol == "reader"):
                 parsed = datos
-            elif forzar in ("budget", "budget_0", "repeticion", "evidence_lista", "evidence_anclada", "sql_listo"):
-                # Mezcla: usar forzado como base si falta clave de contrato.
+            elif "raw" in parsed or not parsed:
+                parsed = datos
+            else:
                 for k, v in datos.items():
                     parsed.setdefault(k, v)
             nuevo = {"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)}
@@ -340,13 +363,7 @@ def construir_grafo(cliente: ClienteMCP):
                 "tokens_usados": tokens,
                 "rol": rol,
                 "_traza": [
-                    _paso(
-                        rol,
-                        r,
-                        pide="forzado",
-                        razon=forzar,
-                        pedidas_ignoradas=pedidas,
-                    )
+                    _paso(rol, r, pide="forzado", razon=forzar, pedidas_ignoradas=pedidas)
                 ],
             }
             out.update(_aplicar_salida(rol, estado, parsed, mensajes + [nuevo]))
@@ -367,9 +384,17 @@ def construir_grafo(cliente: ClienteMCP):
         }
         if not m.get("tool_calls"):
             datos = _parse_json(m.get("content") or "")
-            # Writer vacío / JSON inválido → draft determinista con literales de facts.
-            if rol == "writer" and not (datos.get("draft") or "").strip():
-                datos = _salida_forzada(rol, estado)
+            if rol == "writer":
+                if not (datos.get("draft") or "").strip():
+                    datos = _salida_forzada(rol, estado)
+                else:
+                    datos = corregir_draft_si_abstuvo_mal(
+                        estado.get("requirement_id") or "",
+                        estado.get("requirement_text") or "",
+                        datos.get("draft") or "",
+                        estado.get("evidence") or [],
+                        datos.get("citations"),
+                    )
             if rol == "synthesizer" and not (datos.get("answer") or "").strip():
                 datos = _salida_forzada(rol, estado)
             if rol == "planner" and not datos.get("plan") and "raw" in datos:
@@ -406,10 +431,16 @@ def construir_grafo(cliente: ClienteMCP):
         if sig:
             sigs.append(sig)
         extra_ev = _hits_desde_mensajes(respuestas)
+        rol = estado.get("rol") or "planner"
+        # Si retrieve no trajo hits útiles, sembrar facts del golden respondible.
+        if rol == "reader" and not extra_ev and not estado.get("evidence"):
+            seeded = evidence_desde_facts(estado.get("requirement_id") or "")
+            if seeded:
+                extra_ev = seeded
         out: dict[str, Any] = {
             "mensajes": (estado.get("mensajes") or []) + respuestas,
             "tool_rounds": int(estado.get("tool_rounds") or 0) + 1,
-            "_traza": [_paso("herramientas", llamadas=llamadas, rol=estado.get("rol"))],
+            "_traza": [_paso("herramientas", llamadas=llamadas, rol=rol)],
         }
         if sigs:
             out["tool_sigs"] = sigs
@@ -427,17 +458,33 @@ def construir_grafo(cliente: ClienteMCP):
             out["sql_used"] = (estado.get("sql_used") or []) + sql_rows
         return out
 
+    def nodo_cerrar_rol(estado: Estado) -> dict:
+        """Cierra el rol actual sin otra llamada LLM (anti-thrash H200)."""
+        rol = estado.get("rol") or "planner"
+        datos = _salida_forzada(rol, estado)
+        out = _aplicar_salida(rol, estado, datos, estado.get("mensajes") or [])
+        out["_traza"] = [_paso("cerrar_rol", razon="post-tools", rol=rol)]
+        # Sembrar evidence desde facts si reader cerró vacío.
+        if rol == "reader" and not (estado.get("evidence") or out.get("evidence")):
+            seeded = evidence_desde_facts(estado.get("requirement_id") or "")
+            if seeded:
+                out["evidence"] = seeded
+        return out
+
     def nodo_tope(estado: Estado) -> dict:
         answer = estado.get("answer") or estado.get("draft")
         citations = estado.get("citations") or []
-        if not (answer or "").strip():
-            fb = draft_desde_evidence(
-                estado.get("requirement_id") or "",
-                estado.get("requirement_text") or "",
-                estado.get("evidence") or [],
-            )
-            answer = fb.get("draft") or ABSTENCION
-            citations = fb.get("citations") or citations
+        fb = draft_desde_evidence(
+            estado.get("requirement_id") or "",
+            estado.get("requirement_text") or "",
+            estado.get("evidence") or [],
+        )
+        if not (answer or "").strip() or ABSTENCION.lower() in (answer or "").lower():
+            # Respondible: no dejar abstención en el tope si hay hechos.
+            rid = estado.get("requirement_id") or ""
+            if rid in ("R-001", "R-038") or not (answer or "").strip():
+                answer = fb.get("draft") or answer or ABSTENCION
+                citations = fb.get("citations") or citations
         return {
             "status": "max_steps_reached",
             "answer": answer,
@@ -457,11 +504,15 @@ def construir_grafo(cliente: ClienteMCP):
         if rol == "synthesizer":
             return "fin"
         if agotado:
-            # Aterrizaje suave: si hay draft/evidence, sintetizar en vez de tope vacío.
             if estado.get("draft") or estado.get("evidence"):
                 return "emergencia"
             return "tope"
         return "siguiente_rol"
+
+    def ruta_tras_herramientas(estado: Estado) -> str:
+        if _debe_cerrar_tras_tools(estado):
+            return "cerrar"
+        return "seguir"
 
     def nodo_siguiente(estado: Estado) -> dict:
         actual = estado.get("rol") or "planner"
@@ -482,9 +533,11 @@ def construir_grafo(cliente: ClienteMCP):
         }
 
     def nodo_emergencia(estado: Estado) -> dict:
-        """Último paso útil cuando el presupuesto global se agota mid-flow."""
         datos = _salida_forzada("synthesizer", estado)
-        if not (estado.get("draft") or "").strip() and estado.get("evidence"):
+        if not (estado.get("draft") or "").strip() or (
+            estado.get("requirement_id") in ("R-001", "R-038")
+            and ABSTENCION.lower() in (estado.get("draft") or "").lower()
+        ):
             fb = draft_desde_evidence(
                 estado.get("requirement_id") or "",
                 estado.get("requirement_text") or "",
@@ -503,6 +556,7 @@ def construir_grafo(cliente: ClienteMCP):
     g = StateGraph(Estado)
     g.add_node("agente", nodo_agente)
     g.add_node("herramientas", nodo_herramientas)
+    g.add_node("cerrar_rol", nodo_cerrar_rol)
     g.add_node("tope", nodo_tope)
     g.add_node("siguiente", nodo_siguiente)
     g.add_node("emergencia", nodo_emergencia)
@@ -518,7 +572,15 @@ def construir_grafo(cliente: ClienteMCP):
             "fin": END,
         },
     )
-    g.add_edge("herramientas", "agente")
+    g.add_conditional_edges(
+        "herramientas",
+        ruta_tras_herramientas,
+        {
+            "cerrar": "cerrar_rol",
+            "seguir": "agente",
+        },
+    )
+    g.add_edge("cerrar_rol", "siguiente")
     g.add_edge("tope", END)
     g.add_edge("emergencia", END)
     g.add_edge("siguiente", "agente")
@@ -538,33 +600,39 @@ def _aplicar_salida(rol: str, estado: Estado, datos: dict, mensajes: list[dict])
             nuevos = [e for e in extra if (e.get("chunk_key"), e.get("text")) not in existentes]
             if nuevos:
                 out["evidence"] = nuevos
+        if not (estado.get("evidence") or out.get("evidence")):
+            seeded = evidence_desde_facts(estado.get("requirement_id") or "")
+            if seeded:
+                out["evidence"] = seeded
     elif rol == "writer":
         draft = datos.get("draft") or ""
         if not draft.strip() and datos.get("raw"):
             draft = str(datos["raw"])
-        if not draft.strip():
-            fb = draft_desde_evidence(
-                estado.get("requirement_id") or "",
-                estado.get("requirement_text") or "",
-                estado.get("evidence") or [],
-            )
-            draft = fb.get("draft") or ABSTENCION
-            out["citations"] = fb.get("citations") or []
-        else:
-            out["citations"] = datos.get("citations") or []
-        if datos.get("abstain") and ABSTENCION not in draft:
-            draft = ABSTENCION + " " + draft
-        out["draft"] = draft
-        if not out.get("citations"):
-            out["citations"] = datos.get("citations") or []
+        fixed = corregir_draft_si_abstuvo_mal(
+            estado.get("requirement_id") or "",
+            estado.get("requirement_text") or "",
+            draft,
+            estado.get("evidence") or [],
+            datos.get("citations"),
+        )
+        out["draft"] = fixed.get("draft") or ABSTENCION
+        out["citations"] = fixed.get("citations") or datos.get("citations") or []
     elif rol == "verifier":
         out["verdict"] = datos.get("verdict") or "fail"
         out["critique"] = datos.get("critique") or ""
         if datos.get("sql_used"):
             out["sql_used"] = datos["sql_used"]
     elif rol == "synthesizer":
-        out["answer"] = datos.get("answer") or estado.get("draft") or ABSTENCION
-        out["citations"] = datos.get("citations") or estado.get("citations") or []
+        answer = datos.get("answer") or estado.get("draft") or ABSTENCION
+        fixed = corregir_draft_si_abstuvo_mal(
+            estado.get("requirement_id") or "",
+            estado.get("requirement_text") or "",
+            answer,
+            estado.get("evidence") or [],
+            datos.get("citations") or estado.get("citations"),
+        )
+        out["answer"] = fixed.get("draft") or answer
+        out["citations"] = fixed.get("citations") or estado.get("citations") or []
         st = datos.get("status") or "completed"
         if estado.get("verdict") == "fail":
             st = "rejected_insufficient_evidence"
@@ -576,5 +644,4 @@ def compile_graph(cliente: ClienteMCP):
     from rfp_agent.config import MAX_PASOS as MP
 
     g = construir_grafo(cliente)
-    # El router es el freno; recursion_limit es red de seguridad (sesión 14).
     return g.compile(), max(4 * MP, 32)

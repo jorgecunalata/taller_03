@@ -1,7 +1,7 @@
 """Carga rfp.xlsx → rfp_items (R-001…R-174) y anota el golden de tres ítems.
 
 Golden del primer slice: solo R-001, R-038, R-057.
-No añadir R-018 (ni otros) con placeholders tipo "<exact phrase copied from the PDF>".
+R-018 y cualquier placeholder se filtran siempre en load-db / ensure_loaded.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from rfp_agent.config import GOLDEN_IDS, RFP_DB, RFP_XLSX, RUNS_DB
+from rfp_agent.config import FORBIDDEN_GOLDEN_IDS, GOLDEN_IDS, RFP_DB, RFP_XLSX, RUNS_DB
 
 SCHEMA_RFP = """
 CREATE TABLE IF NOT EXISTS rfp_items (
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS run_trace (
 );
 """
 
-GOLDEN_ROWS = [
+_GOLDEN_ROWS_RAW = [
     {
         "id": "R-001",
         "respondible": 1,
@@ -76,7 +76,7 @@ GOLDEN_ROWS = [
     },
 ]
 
-FACTS_ROWS = [
+_FACTS_ROWS_RAW = [
     {
         "id": "F-001",
         "req_id": "R-001",
@@ -102,6 +102,48 @@ FACTS_ROWS = [
         "kb_status": "VALIDADO",
     },
 ]
+
+
+def _es_placeholder(statement: str) -> bool:
+    s = (statement or "").strip().lower()
+    if not s:
+        return True
+    return (
+        "exact phrase" in s
+        or "[[rellenar]]" in s
+        or s.startswith("<")
+        or "copied from the pdf" in s
+        or "frase literal" in s and "…" in s
+    )
+
+
+def _golden_rows_canonicos() -> list[dict]:
+    allowed = set(GOLDEN_IDS)
+    out = []
+    for g in _GOLDEN_ROWS_RAW:
+        rid = g["id"]
+        if rid in FORBIDDEN_GOLDEN_IDS or rid not in allowed:
+            continue
+        out.append(g)
+    return out
+
+
+def _facts_rows_canonicos() -> list[dict]:
+    allowed = set(GOLDEN_IDS)
+    out = []
+    for f in _FACTS_ROWS_RAW:
+        rid = f["req_id"]
+        if rid in FORBIDDEN_GOLDEN_IDS or rid not in allowed:
+            continue
+        if _es_placeholder(f.get("statement") or ""):
+            continue
+        out.append(f)
+    return out
+
+
+# Exportados para tests / drafting; siempre filtrados.
+GOLDEN_ROWS = _golden_rows_canonicos()
+FACTS_ROWS = _facts_rows_canonicos()
 
 
 def connect_rfp(path: Path | None = None) -> sqlite3.Connection:
@@ -134,68 +176,133 @@ def _leer_xlsx(xlsx: Path) -> list[tuple[str, int, str]]:
     return filas
 
 
+def _purge_forbidden(conn: sqlite3.Connection) -> list[str]:
+    """Borra R-018 y cualquier golden fuera de GOLDEN_IDS. Devuelve ids eliminados."""
+    removed: list[str] = []
+    allowed = set(GOLDEN_IDS)
+    for rid in list(FORBIDDEN_GOLDEN_IDS):
+        if conn.execute("SELECT 1 FROM golden WHERE id = ?", (rid,)).fetchone():
+            removed.append(rid)
+        conn.execute("DELETE FROM facts WHERE req_id = ?", (rid,))
+        conn.execute("DELETE FROM golden WHERE id = ?", (rid,))
+        conn.execute("UPDATE rfp_items SET in_golden = 0 WHERE id = ?", (rid,))
+    extras = [
+        r[0]
+        for r in conn.execute("SELECT id FROM golden").fetchall()
+        if r[0] not in allowed
+    ]
+    for rid in extras:
+        if rid not in removed:
+            removed.append(rid)
+        conn.execute("DELETE FROM facts WHERE req_id = ?", (rid,))
+        conn.execute("DELETE FROM golden WHERE id = ?", (rid,))
+        conn.execute("UPDATE rfp_items SET in_golden = 0 WHERE id = ?", (rid,))
+    # Placeholders en facts
+    for row in conn.execute("SELECT id, req_id, statement FROM facts").fetchall():
+        if _es_placeholder(row["statement"]) or row["req_id"] not in allowed:
+            conn.execute("DELETE FROM facts WHERE id = ?", (row["id"],))
+            if row["req_id"] not in removed and row["req_id"] not in allowed:
+                removed.append(row["req_id"])
+    return removed
+
+
 def load_rfp(xlsx: Path | None = None, db_path: Path | None = None) -> dict:
     xlsx = xlsx or RFP_XLSX
     if not xlsx.exists():
         raise FileNotFoundError(f"No está el workbook RFP: {xlsx}")
     filas = _leer_xlsx(xlsx)
+    golden_rows = _golden_rows_canonicos()
+    facts_rows = _facts_rows_canonicos()
+    # Refrescar exports por si alguien mutó los raw en runtime.
+    global GOLDEN_ROWS, FACTS_ROWS
+    GOLDEN_ROWS = golden_rows
+    FACTS_ROWS = facts_rows
+
     conn = connect_rfp(db_path)
+    stripped: list[str] = []
     try:
         conn.executescript(SCHEMA_RFP)
         conn.execute("DELETE FROM facts")
         conn.execute("DELETE FROM golden")
         conn.execute("DELETE FROM rfp_items")
         for rid, excel_row, texto in filas:
+            in_golden = int(rid in GOLDEN_IDS and rid not in FORBIDDEN_GOLDEN_IDS)
             conn.execute(
                 "INSERT INTO rfp_items (id, texto, excel_row, in_golden) VALUES (?, ?, ?, ?)",
-                (rid, texto, excel_row, int(rid in GOLDEN_IDS)),
+                (rid, texto, excel_row, in_golden),
             )
-        for g in GOLDEN_ROWS:
+        for g in golden_rows:
             conn.execute(
                 "INSERT INTO golden (id, respondible, sql_verificacion, notas) VALUES (?, ?, ?, ?)",
                 (g["id"], g["respondible"], g["sql_verificacion"], g["notas"]),
             )
-        for f in FACTS_ROWS:
+        for f in facts_rows:
             conn.execute(
                 "INSERT INTO facts (id, req_id, statement, source_doc, locator, kb_status) VALUES (?, ?, ?, ?, ?, ?)",
                 (f["id"], f["req_id"], f["statement"], f["source_doc"], f["locator"], f["kb_status"]),
             )
+        stripped = _purge_forbidden(conn)
         conn.commit()
+        golden_ids = [r[0] for r in conn.execute("SELECT id FROM golden ORDER BY id").fetchall()]
     finally:
         conn.close()
     return {
         "rfp_items": len(filas),
-        "golden": len(GOLDEN_ROWS),
-        "facts": len(FACTS_ROWS),
+        "golden": len(golden_ids),
+        "golden_ids": golden_ids,
+        "facts": len(facts_rows),
+        "stripped": stripped,
         "db": str(db_path or RFP_DB),
     }
 
 
 def ensure_loaded() -> None:
+    need_reload = False
     conn = connect_rfp()
     try:
         n = conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rfp_items'"
         ).fetchone()[0]
         if n == 0:
-            load_rfp()
+            need_reload = True
         else:
             count = conn.execute("SELECT COUNT(*) FROM rfp_items").fetchone()[0]
-            golden_ids = {
-                r[0]
-                for r in conn.execute("SELECT id FROM golden").fetchall()
-            }
-            # Reescribe si el corpus cambió o si quedó un golden espurio (p.ej. R-018 placeholder).
+            stripped = _purge_forbidden(conn)
+            if stripped:
+                conn.commit()
+            golden_ids = {r[0] for r in conn.execute("SELECT id FROM golden").fetchall()}
             if count != 174 or golden_ids != set(GOLDEN_IDS):
-                load_rfp()
+                need_reload = True
     except sqlite3.Error:
-        load_rfp()
+        need_reload = True
     finally:
         conn.close()
+
+    if need_reload:
+        load_rfp()
+
     conn = connect_runs()
     try:
         conn.executescript(SCHEMA_RUNS)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def golden_snapshot() -> dict:
+    """Estado actual del golden en SQLite (tras ensure_loaded)."""
+    ensure_loaded()
+    conn = connect_rfp()
+    try:
+        ids = [r[0] for r in conn.execute("SELECT id FROM golden ORDER BY id").fetchall()]
+        n_facts = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+        return {
+            "golden_count": len(ids),
+            "golden_ids": ids,
+            "facts": n_facts,
+            "expected": list(GOLDEN_IDS),
+            "ok": ids == list(GOLDEN_IDS) or set(ids) == set(GOLDEN_IDS),
+        }
     finally:
         conn.close()
 
@@ -217,6 +324,7 @@ def list_golden() -> list[dict]:
         rows = conn.execute(
             "SELECT g.*, i.texto FROM golden g JOIN rfp_items i ON i.id = g.id ORDER BY g.id"
         ).fetchall()
-        return [dict(r) for r in rows]
+        # Defensa en profundidad: nunca devolver R-018 al evaluador.
+        return [dict(r) for r in rows if r["id"] in GOLDEN_IDS and r["id"] not in FORBIDDEN_GOLDEN_IDS]
     finally:
         conn.close()

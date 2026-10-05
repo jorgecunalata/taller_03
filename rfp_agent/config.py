@@ -56,18 +56,20 @@ MAX_REPLAN = int(os.environ.get("MAX_REPLAN", "2"))
 TOKEN_BUDGET = int(os.environ.get("TOKEN_BUDGET", "80000"))
 QUERY_FACTS_ROW_LIMIT = int(os.environ.get("QUERY_FACTS_ROW_LIMIT", "50"))
 
-# Presupuesto de rondas tool→agente por rol (no triplica el global: corta thrashing H200).
+# Reader: 1 ronda retrieve basta; el grafo cierra el rol post-tools (no espera al LLM).
 TOOL_BUDGET_POR_ROL = {
     "planner": int(os.environ.get("TOOL_BUDGET_PLANNER", "2")),
-    "reader": int(os.environ.get("TOOL_BUDGET_READER", "2")),
+    "reader": int(os.environ.get("TOOL_BUDGET_READER", "1")),
     "writer": int(os.environ.get("TOOL_BUDGET_WRITER", "1")),
     "verifier": int(os.environ.get("TOOL_BUDGET_VERIFIER", "2")),
     "synthesizer": int(os.environ.get("TOOL_BUDGET_SYNTHESIZER", "0")),
 }
 
 ABSTENCION = "El corpus no contiene información suficiente."
-# Primer slice: solo estos tres. No añadir R-018 sin frase literal real del PDF.
+
+# Primer slice: SOLO estos tres. R-018 y otros quedan fuera aunque alguien los pegue en db.py.
 GOLDEN_IDS = ("R-001", "R-038", "R-057")
+FORBIDDEN_GOLDEN_IDS = frozenset({"R-018"})
 
 EMBED_OLLAMA_NAME = "bge-m3"
 EMBED_DIM = 1024
