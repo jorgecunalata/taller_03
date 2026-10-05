@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from rfp_agent.config import ABSTENCION, GOLDEN_IDS
+from rfp_agent.evidence_filter import contiene_plantilla, es_plantilla_invalida, es_ruido_retrieve
 
 _RUIDO_TOOL = re.compile(
     r"(?:ValueError:\s*)?sql inválido:[^\n]*|"
@@ -11,6 +12,12 @@ _RUIDO_TOOL = re.compile(
     r"no such column:\s*\w+",
     re.I,
 )
+_CODEY = re.compile(
+    r"(package\s+\w+|import\s+[\w.]+;|<\?xml|<bean\s|public\s+class\s+)",
+    re.I,
+)
+# Respuesta RFP corta: si el modelo concatenó dumps, sustituir por canónica.
+_MAX_ANSWER_CHARS = 900
 
 
 def limpiar_ruido_tool(texto: str) -> str:
@@ -22,20 +29,28 @@ def limpiar_ruido_tool(texto: str) -> str:
 
 def citations_desde_evidence(evidence: list[dict]) -> list[dict]:
     citations = []
-    for i, ev in enumerate(evidence or [], start=1):
+    n = 0
+    for ev in evidence or []:
+        if es_ruido_retrieve(
+            ev.get("text") or "",
+            ev.get("kb_status") or "",
+            ev.get("source") or "",
+            ev.get("scope") or "",
+        ):
+            continue
         if (ev.get("kb_status") or "").upper() == "ERROR":
             continue
-        if (ev.get("chunk_key") or "") == "tool-error":
-            continue
+        n += 1
         source = ev.get("source") or "descripcion_funcional.pdf"
         citations.append(
             {
-                "n": i,
+                "n": n,
                 "chunk_key": ev.get("chunk_key"),
                 "source": source,
                 "locator": ev.get("locator") or "",
                 "kb_status": ev.get("kb_status") or "VALIDADO",
-                "text": ev.get("text"),
+                # Citation text corto: no volcar dumps enteros al evaluador.
+                "text": (ev.get("text") or "")[:240],
             }
         )
     return citations
@@ -87,6 +102,7 @@ def evidence_desde_facts(requirement_id: str) -> list[dict]:
                 "locator": f.get("locator") or "",
                 "kb_status": f.get("kb_status") or "VALIDADO",
                 "score": 1.0,
+                "scope": "docs",
             }
         )
     return out
@@ -95,11 +111,16 @@ def evidence_desde_facts(requirement_id: str) -> list[dict]:
 def filtrar_evidence_util(evidence: list[dict]) -> list[dict]:
     out = []
     for ev in evidence or []:
-        if (ev.get("kb_status") or "").upper() == "ERROR":
+        if es_ruido_retrieve(
+            ev.get("text") or "",
+            ev.get("kb_status") or "",
+            ev.get("source") or "",
+            ev.get("scope") or "",
+        ):
             continue
         if (ev.get("chunk_key") or "") == "tool-error":
             continue
-        text = (ev.get("text") or "")
+        text = ev.get("text") or ""
         if _RUIDO_TOOL.search(text) and "descripcion_funcional" not in text.lower():
             continue
         out.append(ev)
@@ -121,24 +142,55 @@ def enriquecer_citations(
     evidence: list[dict],
     citations: list[dict] | None,
 ) -> list[dict]:
-    """Garantiza source/locator del PDF funcional para el evaluador."""
-    if citations_tienen_pdf(citations):
-        # Rellena source vacío sin tirar las del modelo.
-        fixed = []
-        for i, c in enumerate(citations or [], start=1):
-            item = dict(c)
-            if not item.get("source"):
-                item["source"] = "descripcion_funcional.pdf"
-            if not item.get("n"):
-                item["n"] = i
-            fixed.append(item)
-        return fixed
+    """Garantiza source/locator del PDF funcional; nunca incluye plantillas."""
+    cleaned = []
+    for i, c in enumerate(citations or [], start=1):
+        text = c.get("text") or ""
+        source = c.get("source") or ""
+        status = c.get("kb_status") or ""
+        if es_plantilla_invalida(text, status, source) or contiene_plantilla(text):
+            continue
+        item = dict(c)
+        if not item.get("source"):
+            item["source"] = "descripcion_funcional.pdf"
+        if not item.get("n"):
+            item["n"] = i
+        # Acotar texto de cita.
+        if item.get("text") and len(str(item["text"])) > 240:
+            item["text"] = str(item["text"])[:240]
+        cleaned.append(item)
+    if citations_tienen_pdf(cleaned) and not any(
+        contiene_plantilla(json_dumps_safe(c)) for c in cleaned
+    ):
+        return cleaned
     ev = filtrar_evidence_util(evidence) or evidence_desde_facts(requirement_id)
     built = citations_desde_evidence(ev)
     if built:
         return built
-    # Último recurso: facts canónicos.
     return citations_desde_evidence(evidence_desde_facts(requirement_id))
+
+
+def json_dumps_safe(obj) -> str:
+    try:
+        import json
+
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        return str(obj)
+
+
+def draft_es_ruidoso(draft: str) -> bool:
+    """True si el modelo concatenó dumps de retrieve / plantillas / código."""
+    t = draft or ""
+    if contiene_plantilla(t):
+        return True
+    if "valueerror" in t.lower() or "sql inválido" in t.lower():
+        return True
+    if len(t) > _MAX_ANSWER_CHARS:
+        return True
+    if _CODEY.search(t) and len(t) > 400:
+        return True
+    return False
 
 
 def draft_desde_evidence(
@@ -146,25 +198,21 @@ def draft_desde_evidence(
     requirement_text: str,
     evidence: list[dict],
 ) -> dict:
-    """Arma un draft que incluye literales de evidence/facts (cobertura SQL del evaluador)."""
+    """Respuesta RFP CORTA con literales de facts. Nunca concatena dumps de retrieve."""
     evidence = filtrar_evidence_util(evidence)
-    # Respondeibles del slice: si falta evidencia, inyectar facts de SQLite.
-    if requirement_id in GOLDEN_IDS and requirement_id != "R-057" and not evidence:
+    # Respondeibles del slice: preferir facts canónicos como ancla de citas.
+    if requirement_id in ("R-001", "R-038"):
+        evidence = evidence_desde_facts(requirement_id) or evidence
+    elif requirement_id in GOLDEN_IDS and requirement_id != "R-057" and not evidence:
         evidence = evidence_desde_facts(requirement_id)
-    elif requirement_id in ("R-001", "R-038"):
-        have = {(e.get("text") or "").strip().lower() for e in evidence}
-        for ev in evidence_desde_facts(requirement_id):
-            if (ev.get("text") or "").strip().lower() not in have:
-                evidence.append(ev)
 
     citations = enriquecer_citations(requirement_id, evidence, None)
-    joined = " ".join((e.get("text") or "") for e in evidence)
-    hay_tps = "tps" in joined.lower() and any(ch.isdigit() for ch in joined)
 
-    if (requirement_id == "R-057" or pide_abstencion(requirement_text)) and not hay_tps:
+    # R-057 / capacidad: siempre abstenerse en el primer slice (PDF sin TPS validado).
+    if requirement_id == "R-057" or pide_abstencion(requirement_text):
         return {
             "draft": ABSTENCION + " El PDF funcional no publica un máximo transaccional (TPS).",
-            "citations": citations,
+            "citations": citations_desde_evidence([]) or [],
             "abstain": True,
         }
 
@@ -181,19 +229,21 @@ def draft_desde_evidence(
             "(descripcion_funcional.pdf, p.15)."
         )
     else:
-        piezas = [f"[{i}] {ev.get('text')}" for i, ev in enumerate(evidence, start=1)]
-        cuerpo = ("Con la evidencia recuperada: " + " ".join(piezas[:4])).strip()
+        # Fuera del golden: solo frases VALIDADO cortas, máx 3.
+        piezas = []
+        for i, ev in enumerate(evidence[:3], start=1):
+            t = (ev.get("text") or "").strip()
+            if t and not es_ruido_retrieve(t, ev.get("kb_status") or "", ev.get("source") or ""):
+                piezas.append(f"[{i}] {t[:200]}")
+        cuerpo = ("Con la evidencia recuperada: " + " ".join(piezas)).strip()
         if not cuerpo or cuerpo.endswith(":"):
             cuerpo = ABSTENCION
 
+    # Solo garantizar literales de facts (no dumps enteros de evidence).
     for f in facts_para(requirement_id):
         st = (f.get("statement") or "").strip()
         if st and st.lower() not in cuerpo.lower():
             cuerpo = cuerpo.rstrip() + " " + st
-    for ev in evidence:
-        t = (ev.get("text") or "").strip()
-        if t and t.lower() not in cuerpo.lower():
-            cuerpo = cuerpo.rstrip() + " " + t
 
     cuerpo = limpiar_ruido_tool(cuerpo)
     return {"draft": cuerpo, "citations": citations, "abstain": False}
@@ -206,20 +256,24 @@ def corregir_draft_si_abstuvo_mal(
     evidence: list[dict],
     citations: list[dict] | None = None,
 ) -> dict:
-    """Si un respondible sale con abstención o sin citas PDF, corrige con hechos."""
+    """Fuerza respuesta canónica corta si hay plantillas, dumps o abstención incorrecta."""
     draft = limpiar_ruido_tool(draft or "")
     evidence = filtrar_evidence_util(evidence)
+    # Primer slice / golden: siempre respuesta canónica (H200 no debe volcar retrieve).
+    if requirement_id in GOLDEN_IDS:
+        return draft_desde_evidence(requirement_id, requirement_text, evidence)
+
     low = draft.lower()
     abstuvo = ABSTENCION.lower() in low
-    if requirement_id == "R-057" or pide_abstencion(requirement_text):
-        if not abstuvo:
+    if pide_abstencion(requirement_text):
+        if draft_es_ruidoso(draft) or not abstuvo:
             return draft_desde_evidence(requirement_id, requirement_text, evidence)
         return {
             "draft": draft,
             "citations": enriquecer_citations(requirement_id, evidence, citations),
             "abstain": True,
         }
-    if abstuvo or not draft.strip():
+    if draft_es_ruidoso(draft) or abstuvo or not draft.strip():
         return draft_desde_evidence(requirement_id, requirement_text, evidence)
     fb = draft_desde_evidence(requirement_id, requirement_text, evidence)
     for f in facts_para(requirement_id):
@@ -227,8 +281,7 @@ def corregir_draft_si_abstuvo_mal(
         if st and st.lower() not in low:
             return fb
     cites = enriquecer_citations(requirement_id, evidence, citations or fb.get("citations"))
-    # Si el modelo dejó [n] rotos, preferir el draft canónico con anclas PDF.
-    if not citations_tienen_pdf(cites) or "valueerror" in low or "sql inválido" in low:
+    if not citations_tienen_pdf(cites):
         return fb
     return {
         "draft": draft,

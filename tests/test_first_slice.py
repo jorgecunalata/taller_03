@@ -256,3 +256,71 @@ def test_limpiar_ruido_y_citas_pdf():
         [{"source": "descripcion_funcional.pdf", "locator": "p.11"}],
         "texto [1]",
     )
+
+
+def test_filtra_plantillas_y_no_volcar_retrieve():
+    from rfp_agent.drafting import corregir_draft_si_abstuvo_mal, draft_desde_evidence
+    from rfp_agent.evidence_filter import es_plantilla_invalida
+    from rfp_agent.retriever import _sanear_hit
+
+    assert es_plantilla_invalida("foo [[RELLENAR]] bar", "VALIDADO", "x.md")
+    assert es_plantilla_invalida("hola", "EJEMPLO_NO_VALIDADO", "cap.md")
+    assert _sanear_hit(
+        {
+            "text": "Capacidad [[RELLENAR]] EJEMPLO_NO_VALIDADO",
+            "kb_status": "EJEMPLO_NO_VALIDADO",
+            "source": "capacidad.md",
+        }
+    ) is None
+
+    dump = (
+        "El sistema RTGS de Montran se ha mejorado con capacidades para funcionar 24/7 [1]. "
+        "El RTGS de Montran puede funcionar y procesar pagos de forma 24/7/365 [2].\n"
+        + ("# Plantilla\nEJEMPLO_NO_VALIDADO\n[[RELLENAR]]\n" * 20)
+        + "package com.montran.core_rtgs;\npublic class Foo {}\n" * 30
+    )
+    fixed = corregir_draft_si_abstuvo_mal("R-038", "operación 24x7", dump, [])
+    assert "ejemplo_no_validado" not in fixed["draft"].lower()
+    assert "[[rellenar]]" not in fixed["draft"].lower()
+    assert "package com.montran" not in fixed["draft"].lower()
+    assert "24/7" in fixed["draft"] and "24/7/365" in fixed["draft"]
+    assert len(fixed["draft"]) < 800
+
+    abs_ = corregir_draft_si_abstuvo_mal(
+        "R-057",
+        "Capacidad máxima transaccional",
+        "Capacidad TPS [[RELLENAR]] EJEMPLO_NO_VALIDADO " + ("x" * 2000),
+        [
+            {
+                "text": "Capacidad máxima [[RELLENAR]] 10000 TPS EJEMPLO_NO_VALIDADO",
+                "kb_status": "EJEMPLO_NO_VALIDADO",
+                "source": "capacidad.md",
+            }
+        ],
+    )
+    assert ABSTENCION.lower() in abs_["draft"].lower()
+    assert "ejemplo_no_validado" not in abs_["draft"].lower()
+    assert "[[rellenar]]" not in abs_["draft"].lower()
+
+    d1 = draft_desde_evidence(
+        "R-001",
+        "liq",
+        [
+            {
+                "text": "Liquidación de fondos final e irrevocable en tiempo real",
+                "source": "descripcion_funcional.pdf",
+                "locator": "p.11",
+                "kb_status": "VALIDADO",
+                "chunk_key": "ok",
+            },
+            {
+                "text": "package com.montran;\n" + ("import x;\n" * 50),
+                "source": "Foo.java",
+                "kb_status": "DESCONOCIDO",
+                "scope": "code",
+                "chunk_key": "code",
+            },
+        ],
+    )
+    assert "package com.montran" not in d1["draft"]
+    assert "liquidación de fondos final e irrevocable en tiempo real" in d1["draft"].lower()

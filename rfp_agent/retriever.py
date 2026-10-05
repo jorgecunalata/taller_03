@@ -8,6 +8,7 @@ from rfp_agent.config import (
     QDRANT_URL,
 )
 from rfp_agent.db import connect_rfp, ensure_loaded
+from rfp_agent.evidence_filter import es_plantilla_invalida, es_ruido_retrieve
 from rfp_agent.textutil import normalizar
 
 STUB_CHUNKS = [
@@ -88,6 +89,20 @@ def qdrant_status() -> dict:
     }
 
 
+def _sanear_hit(h: dict) -> dict | None:
+    """Descarta plantillas; marca kb_status si el texto trae [[RELLENAR]]."""
+    texto = h.get("text") or ""
+    status = h.get("kb_status") or "DESCONOCIDO"
+    source = h.get("source") or ""
+    scope = h.get("scope") or ""
+    if es_plantilla_invalida(texto, status, source):
+        return None
+    if es_ruido_retrieve(texto, status, source, scope):
+        return None
+    # Si el payload no traía status pero el texto lo delata, ya se filtró arriba.
+    return h
+
+
 def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
     if not _qdrant_disponible():
         return None
@@ -105,22 +120,27 @@ def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
             colecciones.append(COLLECTION_DOCS)
         if scope in ("code", "both") and cli.collection_exists(COLLECTION_CODE):
             colecciones.append(COLLECTION_CODE)
+        # Pedir de más: tras filtrar plantillas puede quedar poco.
+        fetch_k = max(k * 4, 12)
         hits: list[dict] = []
         for nombre in colecciones:
-            resp = cli.query_points(collection_name=nombre, query=vec, limit=k, with_payload=True)
+            resp = cli.query_points(
+                collection_name=nombre, query=vec, limit=fetch_k, with_payload=True
+            )
             for p in resp.points:
                 payload = p.payload or {}
-                hits.append(
-                    {
-                        "chunk_key": payload.get("chunk_key") or str(p.id),
-                        "text": payload.get("text") or "",
-                        "source": payload.get("doc_id") or payload.get("path") or nombre,
-                        "locator": payload.get("page") or payload.get("path") or "",
-                        "kb_status": payload.get("kb_status") or "DESCONOCIDO",
-                        "score": float(p.score),
-                        "scope": "code" if nombre == COLLECTION_CODE else "docs",
-                    }
-                )
+                raw = {
+                    "chunk_key": payload.get("chunk_key") or str(p.id),
+                    "text": payload.get("text") or "",
+                    "source": payload.get("doc_id") or payload.get("path") or nombre,
+                    "locator": payload.get("page") or payload.get("path") or "",
+                    "kb_status": payload.get("kb_status") or "DESCONOCIDO",
+                    "score": float(p.score),
+                    "scope": "code" if nombre == COLLECTION_CODE else "docs",
+                }
+                limpio = _sanear_hit(raw)
+                if limpio:
+                    hits.append(limpio)
         hits.sort(key=lambda h: h["score"], reverse=True)
         return hits[:k]
     except Exception:
@@ -150,6 +170,8 @@ def _buscar_stub(query: str, scope: str, k: int) -> list[dict]:
 
     puntuados = []
     for c in candidatos:
+        if es_plantilla_invalida(c.get("text") or "", c.get("kb_status") or "", c.get("source") or ""):
+            continue
         blob = normalizar(c["text"] + " " + (c.get("source") or ""))
         score = sum(1 for t in tokens if t in blob)
         if "24/7" in query or "24x7" in q or "24 x 7" in q:
@@ -158,7 +180,7 @@ def _buscar_stub(query: str, scope: str, k: int) -> list[dict]:
         if "irrevoc" in q and "irrevoc" in blob:
             score += 3
         if "tps" in q or "capacidad maxima" in q or "transaccional" in q:
-            score += 0  # no hay cifra; no empujar un número inventado
+            score += 0
         puntuados.append((score, c))
     puntuados.sort(key=lambda x: x[0], reverse=True)
     out = []
@@ -180,6 +202,9 @@ def retrieve_knowledge(query: str, scope: str = "both", k: int = 5) -> list[dict
     k = max(1, min(int(k or 5), 12))
     hits = _buscar_qdrant(query, scope, k)
     if hits is not None:
+        # Si Qdrant solo devolvió basura filtrada, caer al stub documental.
+        if not hits and scope in ("docs", "both"):
+            return _buscar_stub(query, "docs", k)
         return hits
     if scope == "code":
         return [
