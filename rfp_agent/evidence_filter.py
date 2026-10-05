@@ -21,15 +21,20 @@ def es_plantilla_invalida(texto: str = "", kb_status: str = "", source: str = ""
 
 
 def es_ruido_retrieve(texto: str = "", kb_status: str = "", source: str = "", scope: str = "") -> bool:
-    """Descarta plantillas y dumps de código/XML demasiado largos para el Writer."""
+    """Descarta plantillas y dumps de código/XML demasiado largos para el Writer.
+
+    Con scope=code se conservan fragmentos Java/XML del CAG (no son ruido).
+    Con scope=docs|both se siguen filtrando dumps largos para no ensuciar el golden RFP.
+    """
     if es_plantilla_invalida(texto, kb_status, source):
         return True
     if (kb_status or "").upper() in {"ERROR", "AUSENTE"}:
         return True
+    scope_l = (scope or "").lower()
+    if scope_l == "code":
+        return False
     t = texto or ""
     if len(t) > 900 and _CODEY.search(t):
-        return True
-    if (scope or "").lower() == "code" and es_plantilla_invalida(t, kb_status, source):
         return True
     src = (source or "").lower()
     if src.endswith((".java", ".xml", ".properties")) and es_plantilla_invalida(t, kb_status, source):

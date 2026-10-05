@@ -103,15 +103,28 @@ def _sanear_hit(h: dict) -> dict | None:
     return h
 
 
+def _embed_vector(query: str):
+    """Vector de consulta: cliente LLM H200, o embedder CAG (mismo bge-m3)."""
+    from rfp_agent.llm import embed_query
+
+    vec = embed_query(query)
+    if vec is not None:
+        return vec
+    try:
+        from rfp_agent.embedder import embed
+
+        return embed([query], batch_size=1)[0].tolist()
+    except Exception:
+        return None
+
+
 def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
     if not _qdrant_disponible():
         return None
     try:
         from qdrant_client import QdrantClient
 
-        from rfp_agent.llm import embed_query
-
-        vec = embed_query(query)
+        vec = _embed_vector(query)
         if vec is None:
             return None
         cli = QdrantClient(url=QDRANT_URL, timeout=30, check_compatibility=False)
@@ -120,13 +133,16 @@ def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
             colecciones.append(COLLECTION_DOCS)
         if scope in ("code", "both") and cli.collection_exists(COLLECTION_CODE):
             colecciones.append(COLLECTION_CODE)
-        # Pedir de más: tras filtrar plantillas puede quedar poco.
+        if not colecciones:
+            return None
+        # Pedir de más: tras filtrar plantillas (docs) puede quedar poco.
         fetch_k = max(k * 4, 12)
         hits: list[dict] = []
         for nombre in colecciones:
             resp = cli.query_points(
                 collection_name=nombre, query=vec, limit=fetch_k, with_payload=True
             )
+            hit_scope = "code" if nombre == COLLECTION_CODE else "docs"
             for p in resp.points:
                 payload = p.payload or {}
                 raw = {
@@ -136,9 +152,24 @@ def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
                     "locator": payload.get("page") or payload.get("path") or "",
                     "kb_status": payload.get("kb_status") or "DESCONOCIDO",
                     "score": float(p.score),
-                    "scope": "code" if nombre == COLLECTION_CODE else "docs",
+                    "scope": hit_scope,
+                    "project": payload.get("project") or "",
+                    "class": payload.get("class") or "",
                 }
-                limpio = _sanear_hit(raw)
+                # Filtros de plantilla solo aplican a docs; en code se conservan chunks.
+                if hit_scope == "docs":
+                    limpio = _sanear_hit(raw)
+                else:
+                    if es_plantilla_invalida(
+                        raw.get("text") or "",
+                        raw.get("kb_status") or "",
+                        raw.get("source") or "",
+                    ):
+                        limpio = None
+                    elif (raw.get("kb_status") or "").upper() in {"ERROR", "AUSENTE"}:
+                        limpio = None
+                    else:
+                        limpio = raw
                 if limpio:
                     hits.append(limpio)
         hits.sort(key=lambda h: h["score"], reverse=True)

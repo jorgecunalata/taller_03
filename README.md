@@ -24,6 +24,8 @@ python3 -m rfp_agent.cli load-db
 python3 -m rfp_agent.cli tools
 python3 -m rfp_agent.cli run R-001
 python3 -m rfp_agent.cli eval-rfp
+# CAG código (Qdrant + embeddings H200 o local):
+# python3 -m rfp_agent.cli index-code
 python3 -m pytest -q
 ```
 
@@ -45,13 +47,19 @@ Anti-thrash (importante en H200): `H200_ENABLE_THINKING=0`, presupuestos `TOOL_B
 
 Sin VPN: `LLM_BACKEND=simulated` (o `auto`, que cae solo). El grafo y el evaluador SQL siguen siendo los mismos.
 
-### Código Java (más adelante, no este slice)
+### Código Java / CAG (`index-code`)
 
-```
-DEMO_ATS=./demo_ats
+En el Mac, con `demo_ats` hermano (o symlink) y Qdrant en `:6333`:
+
+```bash
+# en .env: DEMO_ATS=../demo_ats   (o la ruta absoluta)
+# Embeddings: H200 Ollama bge-m3 (VPN) o EMBEDDING_BACKEND=local
+python3 -m rfp_agent.cli index-code
 ```
 
-Subproyectos esperados: `CORE`, `CORE_BILL`, `CORE_RTGS`, `CORE_PO_ATS`, `CORE_PARSER`, `CORE_MS`, `CORE_ACH`, `CORE_ATS`. Indexar in situ; no hay zip en este repo.
+Indexa `.java` / `.xml` / `.properties` (y similares) bajo los `CODE_ROOTS` hacia la colección Qdrant `montran_code`. Omite raíces ausentes (p. ej. `CORE_MS`). Resuelve nombres sin distinguir mayúsculas (`core_rtgs` ≡ `CORE_RTGS`). No indexa por defecto `demo_ats_release`, `demo_po`, `core_runtime` ni el `demo_ats` anidado.
+
+`retrieve_knowledge` con `scope=code|both` consulta esa colección si existe. Comandos Mac exactos: Project store `docs/mac-runbook.md` (§2).
 
 ## Layout
 

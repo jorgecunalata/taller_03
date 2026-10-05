@@ -104,11 +104,19 @@ def _get_requirement(requirement_id: str) -> dict:
 
 
 def _list_sources() -> dict:
+    from rfp_agent.config import resolve_code_root
+
     qd = qdrant_status()
     roots = []
     for name in CODE_ROOTS:
-        p = DEMO_ATS / name
-        roots.append({"name": name, "path": str(p), "exists": p.exists()})
+        p = resolve_code_root(name)
+        roots.append(
+            {
+                "name": name,
+                "path": str(p) if p else str(DEMO_ATS / name),
+                "exists": bool(p and p.exists()),
+            }
+        )
     return {
         "qdrant": qd,
         "demo_ats": {"path": str(DEMO_ATS), "exists": DEMO_ATS.exists(), "code_roots": roots},

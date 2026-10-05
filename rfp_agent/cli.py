@@ -1,4 +1,4 @@
-"""CLI: load-db, run, eval-rfp."""
+"""CLI: load-db, index-code, run, eval-rfp."""
 from __future__ import annotations
 
 import argparse
@@ -53,6 +53,26 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("load-db", help="Carga las 174 filas de data/rfp.xlsx en SQLite")
     sub.add_parser("tools", help="Lista el catálogo MCP descubierto")
 
+    ic = sub.add_parser(
+        "index-code",
+        help="Indexa Java/XML/properties bajo DEMO_ATS → Qdrant montran_code (CAG)",
+    )
+    ic.add_argument(
+        "--demo-ats",
+        default=None,
+        help="Override de DEMO_ATS (default: env / ./demo_ats)",
+    )
+    ic.add_argument(
+        "--qdrant-url",
+        default=None,
+        help="Override de QDRANT_URL (default: http://localhost:6333)",
+    )
+    ic.add_argument(
+        "--no-recreate",
+        action="store_true",
+        help="No borra la colección antes de upsert (por defecto se recrea)",
+    )
+
     r = sub.add_parser("run", help="Corre el grafo sobre un R-nnn")
     r.add_argument("requirement_id")
 
@@ -98,6 +118,30 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             )
         )
+        return 0
+    if args.cmd == "index-code":
+        from rfp_agent.code_pipeline import imprimir_resumen, indexar_codigo
+        from rfp_agent.embedder import EmbeddingsUnavailable
+
+        demo = Path(args.demo_ats).expanduser() if args.demo_ats else None
+        if demo is not None and not demo.is_absolute():
+            demo = (ROOT / demo).resolve()
+        try:
+            summary = indexar_codigo(
+                demo=demo,
+                qdrant_url=args.qdrant_url,
+                recreate=not args.no_recreate,
+            )
+        except EmbeddingsUnavailable as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        imprimir_resumen(summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+        if summary.get("files_read", 0) == 0:
+            return 1
         return 0
     if args.cmd == "run":
         get_llm()
