@@ -203,6 +203,7 @@ def test_draft_incluye_hechos_golden():
         [{"chunk_key": "k", "text": "Liquidación de fondos final e irrevocable en tiempo real", "source": "descripcion_funcional.pdf", "locator": "p.11", "kb_status": "VALIDADO"}],
     )
     assert "liquidación de fondos final e irrevocable en tiempo real" in d1["draft"].lower()
+    assert "descripcion_funcional" in json.dumps(d1["citations"]).lower()
     d38 = draft_desde_evidence(
         "R-038",
         "24x7",
@@ -215,3 +216,43 @@ def test_draft_incluye_hechos_golden():
     assert "24/7" in low and "24/7/365" in low
     d57 = draft_desde_evidence("R-057", "Capacidad máxima transaccional TPS", [])
     assert ABSTENCION.lower() in d57["draft"].lower()
+
+
+def test_query_facts_reescribe_requirement_id():
+    from rfp_agent.mcp import ClienteMCP, construir_servidor, reescribir_sql_facts
+
+    assert "req_id" in reescribir_sql_facts(
+        "SELECT statement FROM facts WHERE requirement_id = 'R-001'"
+    )
+    cli = ClienteMCP(construir_servidor())
+    # Antes fallaba con no such column: requirement_id
+    r = cli.invocar(
+        "query_facts",
+        {"sql": "SELECT statement, source_doc, locator FROM facts WHERE requirement_id = 'R-001'"},
+    )
+    assert "error" not in r or not r.get("error")
+    assert r.get("rows")
+    assert "Liquidación" in (r["rows"][0].get("statement") or "")
+
+
+def test_limpiar_ruido_y_citas_pdf():
+    from rfp_agent.drafting import corregir_draft_si_abstuvo_mal, limpiar_ruido_tool
+    from rfp_agent.evaluate import _citas_pdf
+
+    sucio = (
+        "Liquidación de fondos final e irrevocable en tiempo real [1] "
+        "ValueError: sql inválido: no such column: requirement_id"
+    )
+    limpio = limpiar_ruido_tool(sucio)
+    assert "valueerror" not in limpio.lower()
+    assert "requirement_id" not in limpio.lower()
+    fixed = corregir_draft_si_abstuvo_mal("R-001", "liquidación", sucio, [], [{"n": 1}])
+    assert "valueerror" not in fixed["draft"].lower()
+    assert "descripcion_funcional" in json.dumps(fixed["citations"]).lower()
+    assert _citas_pdf(fixed["citations"], [], fixed["draft"])
+    # [n] + evidence con PDF también cuenta
+    assert _citas_pdf(
+        [{"n": 1}],
+        [{"source": "descripcion_funcional.pdf", "locator": "p.11"}],
+        "texto [1]",
+    )

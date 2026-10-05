@@ -117,17 +117,42 @@ def _list_sources() -> dict:
     }
 
 
+def reescribir_sql_facts(sql: str) -> str:
+    """H200 a menudo usa requirement_id; en `facts` la columna es req_id.
+
+    `evidence_log` (runs.sqlite) sí usa requirement_id, pero query_facts solo lee rfp.sqlite.
+    """
+    texto = (sql or "").strip()
+    # Si menciona evidence_log, no reescribir (tabla no está aquí de todos modos).
+    if re.search(r"\bevidence_log\b", texto, re.I):
+        return texto
+    # facts / golden / rfp_items: requirement_id → req_id (salvo rfp_items.id).
+    if re.search(r"\bfacts\b", texto, re.I) or re.search(r"\brequirement_id\b", texto, re.I):
+        texto = re.sub(r"\brequirement_id\b", "req_id", texto, flags=re.I)
+    return texto
+
+
 def _query_facts(sql: str) -> dict:
     ensure_loaded()
     texto = (sql or "").strip().rstrip(";")
     if not texto:
-        raise ValueError("sql vacío")
+        return {"error": "sql vacío", "columns": [], "rows": []}
     if ";" in texto:
-        raise ValueError("una sola sentencia")
+        return {"error": "una sola sentencia", "columns": [], "rows": []}
     if not re.match(r"^select\b", texto, re.I):
-        raise ValueError("solo SELECT")
+        return {"error": "solo SELECT", "columns": [], "rows": []}
     if _WRITE.search(texto):
-        raise ValueError("escritura prohibida")
+        return {"error": "escritura prohibida", "columns": [], "rows": []}
+    if re.search(r"\bevidence_log\b", texto, re.I):
+        return {
+            "error": (
+                "evidence_log vive en runs.sqlite; usa record_evidence. "
+                "Para hechos: SELECT … FROM facts WHERE req_id = 'R-001'"
+            ),
+            "columns": [],
+            "rows": [],
+        }
+    texto = reescribir_sql_facts(texto)
     conn = connect_rfp()
     try:
         cur = conn.execute(texto)
@@ -135,7 +160,16 @@ def _query_facts(sql: str) -> dict:
         rows = [dict(zip(cols, r)) for r in cur.fetchmany(QUERY_FACTS_ROW_LIMIT)]
         return {"columns": cols, "rows": rows, "truncated": cur.fetchone() is not None}
     except sqlite3.Error as e:
-        raise ValueError(f"sql inválido: {e}") from e
+        # No raise: el harness devuelve error estructurado; no ensuciar el draft.
+        hint = ""
+        if "no such column" in str(e).lower() and "requirement" in str(e).lower():
+            hint = " (en facts la columna es req_id, no requirement_id)"
+        return {
+            "error": f"sql inválido: {e}{hint}",
+            "columns": [],
+            "rows": [],
+            "hint": "SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-001'",
+        }
     finally:
         conn.close()
 
@@ -199,11 +233,17 @@ def construir_servidor() -> ServidorMCP:
     )
     s.publicar(
         "query_facts",
-        "SELECT de solo lectura sobre SQLite de hechos/golden. El límite de filas lo aplica el servidor.",
+        "SELECT de solo lectura sobre SQLite de hechos/golden (rfp.sqlite). "
+        "En la tabla facts la columna es req_id (NO requirement_id). "
+        "Ejemplo: SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-001'. "
+        "El límite de filas lo aplica el servidor.",
         {
             "type": "object",
             "properties": {
-                "sql": {"type": "string", "description": "Una sentencia SELECT"},
+                "sql": {
+                    "type": "string",
+                    "description": "Una sentencia SELECT. facts.req_id, no requirement_id.",
+                },
             },
             "required": ["sql"],
         },
@@ -211,7 +251,8 @@ def construir_servidor() -> ServidorMCP:
     )
     s.publicar(
         "record_evidence",
-        "Ancla evidencia usada (requirement_id, chunk_key, cita) en SQLite de corrida. Idempotente.",
+        "Ancla evidencia usada (requirement_id, chunk_key, cita) en runs.sqlite. Idempotente. "
+        "No es SQL: pasa argumentos JSON. evidence_log.requirement_id es el id R-nnn.",
         {
             "type": "object",
             "properties": {

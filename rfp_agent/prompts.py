@@ -6,6 +6,8 @@ No redactas la respuesta final. No consolidas.
 Herramientas MCP permitidas: las que te pasan en esta llamada (catálogo descubierto, filtrado).
 Presupuesto: como máximo 2 llamadas a tools. Luego emite el JSON de plan y para.
 Restricciones de hand-off: kb_status viaja con cada fragmento; tope de citas 8; no inventar TPS.
+SQL de hechos: columna req_id en facts (NO requirement_id).
+Ejemplo sql_checks: SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-001'
 Si el ítem no es golden, igual planifica lectura; no hay sql_verificacion.
 Cuando termines, responde JSON:
 {"ruta":"docs|code|both","plan":[{"paso":"...","objetivo":"..."}],"sql_checks":["SELECT ..."],"restricciones":["..."]}
@@ -33,6 +35,9 @@ Responde SOLO JSON:
 
 VERIFIER = """Eres el Verifier. Contrastas el draft contra Observations y contra SQL de hechos.
 Presupuesto: máximo 2 tools (query_facts primero; retrieve solo si hace falta un re-chequeo).
+IMPORTANTE: en la tabla facts la columna es req_id (NO requirement_id).
+Ejemplo: SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-001'
+Nunca consultes evidence_log vía query_facts (está en otra base; usa record_evidence).
 Si el draft cita [[RELLENAR]] o EJEMPLO_NO_VALIDADO como dato, verdict=fail.
 Si respondible=0 (p.ej. máximo TPS), exige abstención y ninguna cifra inventada.
 Si el draft ya cubre los statement de facts (o la abstención), verdict=pass sin más tools.

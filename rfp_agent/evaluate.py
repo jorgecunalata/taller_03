@@ -24,9 +24,31 @@ def _cubre(answer: str, citations: list, statement: str) -> bool:
     return all(t in blob for t in tokens[:4])
 
 
-def _citas_pdf(citations: list, evidence: list) -> bool:
-    blob = json.dumps(citations, ensure_ascii=False).lower() + json.dumps(evidence, ensure_ascii=False).lower()
-    return "descripcion_funcional" in blob or "p.11" in blob or "p.13" in blob or "p.15" in blob
+def _citas_pdf(citations: list, evidence: list, answer: str = "") -> bool:
+    """Acepta ancla PDF en citations/evidence o [n] + fuente PDF en el answer."""
+    blob = (
+        json.dumps(citations, ensure_ascii=False).lower()
+        + json.dumps(evidence, ensure_ascii=False).lower()
+        + (answer or "").lower()
+    )
+    if (
+        "descripcion_funcional" in blob
+        or "p.11" in blob
+        or "p.13" in blob
+        or "p.15" in blob
+    ):
+        return True
+    # [1]/[2] en el texto + al menos una citation/evidence con source/locator
+    if re.search(r"\[\d+\]", answer or ""):
+        for c in citations or []:
+            src = f"{c.get('source') or ''} {c.get('locator') or ''}".lower()
+            if "descripcion_funcional" in src or re.search(r"p\.\d+", src):
+                return True
+        for e in evidence or []:
+            src = f"{e.get('source') or ''} {e.get('locator') or ''}".lower()
+            if "descripcion_funcional" in src or re.search(r"p\.\d+", src):
+                return True
+    return False
 
 
 def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
@@ -37,6 +59,8 @@ def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
     fallos = []
     if any(p in blob for p in _PROHIBIDO):
         fallos.append("cita_plantilla")
+    if "sql inválido" in answer.lower() or "valueerror" in answer.lower():
+        fallos.append("ruido_tool_en_answer")
     respondible = bool(item.get("respondible"))
     if not respondible:
         if not se_abstuvo(answer, ABSTENCION):
@@ -47,7 +71,7 @@ def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
         for row in facts_rows:
             if not _cubre(answer, citations, row.get("statement") or ""):
                 fallos.append(f"falta_hecho:{row.get('statement')}")
-        if not _citas_pdf(citations, evidence):
+        if not _citas_pdf(citations, evidence, answer):
             fallos.append("falta_cita_pdf")
     ok = not fallos
     return {

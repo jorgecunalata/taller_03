@@ -18,7 +18,9 @@ from rfp_agent.config import (
 from rfp_agent.drafting import (
     corregir_draft_si_abstuvo_mal,
     draft_desde_evidence,
+    enriquecer_citations,
     evidence_desde_facts,
+    limpiar_ruido_tool,
 )
 from rfp_agent.llm import TOOLS_POR_ROL, get_llm, normalize_assistant_message
 from rfp_agent.mcp import ClienteMCP
@@ -145,19 +147,12 @@ def _hits_desde_mensajes(mensajes: list[dict]) -> list[dict]:
             body = json.loads(m.get("content") or "{}")
         except json.JSONDecodeError:
             continue
-        if isinstance(body, dict) and body.get("error"):
-            extra.append(
-                {
-                    "chunk_key": "tool-error",
-                    "text": str(body["error"]),
-                    "source": "mcp",
-                    "locator": "",
-                    "kb_status": "ERROR",
-                    "score": 0.0,
-                }
-            )
+        if not isinstance(body, dict):
             continue
-        hits = (body.get("hits") or []) if isinstance(body, dict) else []
+        # Nunca promover errores de tool a evidence[] (ensucian el draft H200).
+        if body.get("error"):
+            continue
+        hits = body.get("hits") or []
         for h in hits:
             extra.append(
                 {
@@ -480,11 +475,16 @@ def construir_grafo(cliente: ClienteMCP):
             estado.get("evidence") or [],
         )
         if not (answer or "").strip() or ABSTENCION.lower() in (answer or "").lower():
-            # Respondible: no dejar abstención en el tope si hay hechos.
             rid = estado.get("requirement_id") or ""
             if rid in ("R-001", "R-038") or not (answer or "").strip():
                 answer = fb.get("draft") or answer or ABSTENCION
                 citations = fb.get("citations") or citations
+        answer = limpiar_ruido_tool(answer or "")
+        citations = enriquecer_citations(
+            estado.get("requirement_id") or "",
+            estado.get("evidence") or [],
+            citations,
+        )
         return {
             "status": "max_steps_reached",
             "answer": answer,
@@ -608,6 +608,7 @@ def _aplicar_salida(rol: str, estado: Estado, datos: dict, mensajes: list[dict])
         draft = datos.get("draft") or ""
         if not draft.strip() and datos.get("raw"):
             draft = str(datos["raw"])
+        draft = limpiar_ruido_tool(draft)
         fixed = corregir_draft_si_abstuvo_mal(
             estado.get("requirement_id") or "",
             estado.get("requirement_text") or "",
@@ -616,14 +617,18 @@ def _aplicar_salida(rol: str, estado: Estado, datos: dict, mensajes: list[dict])
             datos.get("citations"),
         )
         out["draft"] = fixed.get("draft") or ABSTENCION
-        out["citations"] = fixed.get("citations") or datos.get("citations") or []
+        out["citations"] = enriquecer_citations(
+            estado.get("requirement_id") or "",
+            estado.get("evidence") or [],
+            fixed.get("citations") or datos.get("citations"),
+        )
     elif rol == "verifier":
         out["verdict"] = datos.get("verdict") or "fail"
         out["critique"] = datos.get("critique") or ""
         if datos.get("sql_used"):
             out["sql_used"] = datos["sql_used"]
     elif rol == "synthesizer":
-        answer = datos.get("answer") or estado.get("draft") or ABSTENCION
+        answer = limpiar_ruido_tool(datos.get("answer") or estado.get("draft") or ABSTENCION)
         fixed = corregir_draft_si_abstuvo_mal(
             estado.get("requirement_id") or "",
             estado.get("requirement_text") or "",
@@ -631,8 +636,12 @@ def _aplicar_salida(rol: str, estado: Estado, datos: dict, mensajes: list[dict])
             estado.get("evidence") or [],
             datos.get("citations") or estado.get("citations"),
         )
-        out["answer"] = fixed.get("draft") or answer
-        out["citations"] = fixed.get("citations") or estado.get("citations") or []
+        out["answer"] = limpiar_ruido_tool(fixed.get("draft") or answer)
+        out["citations"] = enriquecer_citations(
+            estado.get("requirement_id") or "",
+            estado.get("evidence") or [],
+            fixed.get("citations") or estado.get("citations"),
+        )
         st = datos.get("status") or "completed"
         if estado.get("verdict") == "fail":
             st = "rejected_insufficient_evidence"
