@@ -1,4 +1,4 @@
-"""CLI: load-db, index-code, run, eval-rfp."""
+"""CLI: load-db, index-code, index-docs, run, eval-rfp."""
 from __future__ import annotations
 
 import argparse
@@ -73,6 +73,26 @@ def main(argv: list[str] | None = None) -> int:
         help="No borra la colección antes de upsert (por defecto se recrea)",
     )
 
+    idocs = sub.add_parser(
+        "index-docs",
+        help="Indexa PDF/DOCX/MD bajo corpus/ (+ corpus/docs/) → Qdrant documentos",
+    )
+    idocs.add_argument(
+        "--corpus",
+        default=None,
+        help="Override del directorio corpus (default: ./corpus)",
+    )
+    idocs.add_argument(
+        "--qdrant-url",
+        default=None,
+        help="Override de QDRANT_URL (default: http://localhost:6333)",
+    )
+    idocs.add_argument(
+        "--no-recreate",
+        action="store_true",
+        help="No borra la colección antes de upsert (por defecto se recrea)",
+    )
+
     r = sub.add_parser("run", help="Corre el grafo sobre un R-nnn")
     r.add_argument("requirement_id")
 
@@ -141,6 +161,31 @@ def main(argv: list[str] | None = None) -> int:
         imprimir_resumen(summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
         if summary.get("files_read", 0) == 0:
+            return 1
+        return 0
+    if args.cmd == "index-docs":
+        from rfp_agent.docs_pipeline import imprimir_resumen as imprimir_docs
+        from rfp_agent.docs_pipeline import indexar_documentos
+        from rfp_agent.embedder import EmbeddingsUnavailable
+
+        corpus = Path(args.corpus).expanduser() if args.corpus else None
+        if corpus is not None and not corpus.is_absolute():
+            corpus = (ROOT / corpus).resolve()
+        try:
+            summary = indexar_documentos(
+                corpus=corpus,
+                qdrant_url=args.qdrant_url,
+                recreate=not args.no_recreate,
+            )
+        except EmbeddingsUnavailable as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        imprimir_docs(summary)
+        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+        if summary.get("files_indexed", 0) == 0 or summary.get("chunks", 0) == 0:
             return 1
         return 0
     if args.cmd == "run":

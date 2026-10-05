@@ -104,7 +104,8 @@ def _get_requirement(requirement_id: str) -> dict:
 
 
 def _list_sources() -> dict:
-    from rfp_agent.config import resolve_code_root
+    from rfp_agent.config import CORPUS, resolve_code_root
+    from rfp_agent.docs_pipeline import iter_doc_paths
 
     qd = qdrant_status()
     roots = []
@@ -117,11 +118,19 @@ def _list_sources() -> dict:
                 "exists": bool(p and p.exists()),
             }
         )
+    doc_paths, dirs_info = iter_doc_paths()
     return {
         "qdrant": qd,
         "demo_ats": {"path": str(DEMO_ATS), "exists": DEMO_ATS.exists(), "code_roots": roots},
+        "corpus": {
+            "path": str(CORPUS),
+            "exists": CORPUS.exists(),
+            "dirs": dirs_info,
+            "files": [p.name for p in doc_paths],
+            "collection": qd.get("documentos"),
+        },
         "sqlite_facts": True,
-        "stub_docs": True,
+        "stub_docs": not qd.get("documentos"),
     }
 
 

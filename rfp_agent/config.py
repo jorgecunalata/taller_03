@@ -87,6 +87,13 @@ CATALOG_TOKEN_BUDGET = 1500
 MAX_CODE_CHUNKS = int(os.environ.get("MAX_CODE_CHUNKS", "25000"))
 CODE_EMBED_BATCH = int(os.environ.get("CODE_EMBED_BATCH", "64"))
 
+# Documentos (Taller 2: ~512/102). Aprox. por palabras si no hay tokenizer.
+CHUNK_TOKENS = int(os.environ.get("CHUNK_TOKENS", "512"))
+OVERLAP_TOKENS = int(os.environ.get("OVERLAP_TOKENS", "102"))
+DOC_EMBED_BATCH = int(os.environ.get("DOC_EMBED_BATCH", "8"))
+PISO_CARACTERES_DOC = int(os.environ.get("PISO_CARACTERES_DOC", "200"))
+DOC_EXTS = {".pdf", ".docx", ".md", ".txt"}
+
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_DOCS = os.environ.get("COLLECTION_DOCS", "documentos")
 COLLECTION_CODE = os.environ.get("COLLECTION_CODE", "montran_code")
