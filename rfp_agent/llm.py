@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -11,18 +12,27 @@ from rfp_agent.config import (
     ABSTENCION,
     H200_API_KEY,
     H200_EMBED_PORT,
+    H200_ENABLE_THINKING,
     H200_HOST,
     H200_LLM_PORT,
     LLM_BACKEND,
 )
+from rfp_agent.drafting import draft_desde_evidence
 
 TOOLS_POR_ROL = {
     "planner": ["get_requirement", "list_sources", "query_facts"],
     "reader": ["retrieve_knowledge", "query_facts", "list_sources"],
     "writer": ["record_evidence"],
     "verifier": ["query_facts", "retrieve_knowledge"],
-    "synthesizer": ["query_facts"],
+    # Slice 1: empaquetar desde estado; query_facts opcional del plan no es necesario.
+    "synthesizer": [],
 }
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.I | re.S)
+_TOOL_CALL_BLOCK = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
+    re.I | re.S,
+)
 
 
 def _http_json(url: str, body: dict | None = None, timeout: float = 180) -> dict:
@@ -37,6 +47,93 @@ def _http_json(url: str, body: dict | None = None, timeout: float = 180) -> dict
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
+
+
+def _strip_thinking(texto: str) -> str:
+    return _THINK_RE.sub("", texto or "").strip()
+
+
+def _parse_args(raw: Any) -> str:
+    if raw is None:
+        return "{}"
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False)
+    if not isinstance(raw, str):
+        return json.dumps(raw, ensure_ascii=False)
+    s = raw.strip()
+    if not s:
+        return "{}"
+    try:
+        json.loads(s)
+        return s
+    except json.JSONDecodeError:
+        start, end = s.find("{"), s.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                json.loads(s[start : end + 1])
+                return s[start : end + 1]
+            except json.JSONDecodeError:
+                pass
+        return "{}"
+
+
+def normalize_assistant_message(mensaje: dict) -> dict:
+    """Normaliza tool_calls / content de vLLM (thinking, args rotos, tool_call en texto)."""
+    m = dict(mensaje or {})
+    content = _strip_thinking(m.get("content") or "")
+    # Algunos modelos dejan el JSON final después del thinking en reasoning_content.
+    if not content and m.get("reasoning_content"):
+        content = _strip_thinking(str(m.get("reasoning_content")))
+
+    tool_calls = list(m.get("tool_calls") or [])
+    cleaned_calls = []
+    for i, tc in enumerate(tool_calls):
+        fn = dict((tc or {}).get("function") or {})
+        name = fn.get("name") or ""
+        if not name:
+            continue
+        cleaned_calls.append(
+            {
+                "id": (tc or {}).get("id") or f"call-{i}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": _parse_args(fn.get("arguments")),
+                },
+            }
+        )
+
+    # Fallback: tool_call embebido en el content (plantillas Qwen / terra).
+    if not cleaned_calls and content:
+        for i, match in enumerate(_TOOL_CALL_BLOCK.finditer(content)):
+            try:
+                payload = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            name = payload.get("name") or payload.get("tool")
+            args = payload.get("arguments") or payload.get("parameters") or {}
+            if not name:
+                continue
+            cleaned_calls.append(
+                {
+                    "id": f"embedded-{i}",
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": _parse_args(args),
+                    },
+                }
+            )
+        if cleaned_calls:
+            content = _TOOL_CALL_BLOCK.sub("", content).strip()
+
+    out = {
+        "role": "assistant",
+        "content": content,
+    }
+    if cleaned_calls:
+        out["tool_calls"] = cleaned_calls
+    return out
 
 
 class H200:
@@ -74,10 +171,15 @@ class H200:
             "model": self.modelo,
             "messages": mensajes,
             "max_tokens": max_tokens,
-            "chat_template_kwargs": {"enable_thinking": True},
+            "chat_template_kwargs": {"enable_thinking": H200_ENABLE_THINKING},
         }
         if tools:
             cuerpo["tools"] = tools
+            # Fuerza tool o respuesta final; evita bucles de "pensar sin decidir".
+            if role == "synthesizer":
+                cuerpo["tool_choice"] = "none"
+            else:
+                cuerpo["tool_choice"] = "auto"
         if json_mode:
             cuerpo["response_format"] = {"type": "json_object"}
         t0 = time.perf_counter()
@@ -85,17 +187,20 @@ class H200:
             cuerpo["temperature"] = 0
             r = self._pedir(H200_LLM_PORT, "v1/chat/completions", cuerpo)
         except Exception as e:
-            # Familia terra (y similares) puede rechazar temperature.
-            if "temperature" in str(e).lower() or True:
-                cuerpo.pop("temperature", None)
+            cuerpo.pop("temperature", None)
+            try:
+                r = self._pedir(H200_LLM_PORT, "v1/chat/completions", cuerpo)
+            except Exception:
+                # Algunos vLLM rechazan tool_choice / chat_template_kwargs.
+                cuerpo.pop("tool_choice", None)
+                cuerpo.pop("chat_template_kwargs", None)
                 try:
                     r = self._pedir(H200_LLM_PORT, "v1/chat/completions", cuerpo)
                 except Exception:
                     raise e from None
-            else:
-                raise
+        mensaje = normalize_assistant_message(r["choices"][0]["message"])
         return {
-            "mensaje": r["choices"][0]["message"],
+            "mensaje": mensaje,
             "uso": r.get("usage", {}),
             "latencia_s": round(time.perf_counter() - t0, 2),
         }
@@ -141,7 +246,7 @@ class SimulatedLLM:
         names = [t["function"]["name"] for t in (tools or [])]
         msg = self._act(role, mensajes, names)
         return {
-            "mensaje": msg,
+            "mensaje": normalize_assistant_message(msg),
             "uso": {"prompt_tokens": 32, "completion_tokens": 48, "total_tokens": 80},
             "latencia_s": round(time.perf_counter() - t0, 4),
         }
@@ -253,7 +358,7 @@ class SimulatedLLM:
                             }
                         )
                     return {"role": "assistant", "content": "", "tool_calls": calls}
-            draft = _draft_from_evidence(req_id, texto, evidence)
+            draft = draft_desde_evidence(req_id, texto, evidence)
             return {"role": "assistant", "content": json.dumps(draft, ensure_ascii=False)}
 
         if role == "verifier":
@@ -314,7 +419,7 @@ def _tool_obs(mensajes: list[dict]) -> list[Any]:
 
 def _find_req_id(mensajes: list[dict], user: str) -> str:
     blob = user + json.dumps(mensajes, ensure_ascii=False)
-    m = __import__("re").search(r"R-\d{3}", blob)
+    m = re.search(r"R-\d{3}", blob)
     return m.group(0) if m else "R-001"
 
 
@@ -331,7 +436,6 @@ def _parse_evidence_from_user(user: str) -> list[dict]:
     try:
         if "evidence=" in user:
             raw = user.split("evidence=", 1)[1]
-            # hasta el próximo bloque marcado
             if "\n---" in raw:
                 raw = raw.split("\n---", 1)[0]
             data = json.loads(raw)
@@ -340,47 +444,6 @@ def _parse_evidence_from_user(user: str) -> list[dict]:
     except json.JSONDecodeError:
         pass
     return []
-
-
-def _draft_from_evidence(req_id: str, texto: str, evidence: list[dict]) -> dict:
-    citations = []
-    piezas = []
-    for i, ev in enumerate(evidence, start=1):
-        citations.append(
-            {
-                "n": i,
-                "chunk_key": ev.get("chunk_key"),
-                "source": ev.get("source"),
-                "locator": ev.get("locator"),
-                "kb_status": ev.get("kb_status"),
-                "text": ev.get("text"),
-            }
-        )
-        piezas.append(f"[{i}] {ev.get('text')}")
-    joined = " ".join(e.get("text") or "" for e in evidence)
-    pide_tps = any(w in (texto or "").lower() for w in ("tps", "capacidad máxima", "capacidad maxima"))
-    hay_tps = "tps" in joined.lower() and any(ch.isdigit() for ch in joined)
-    if pide_tps and not hay_tps:
-        return {
-            "draft": ABSTENCION + " El PDF funcional no publica un máximo transaccional (TPS).",
-            "citations": citations,
-            "abstain": True,
-        }
-    if req_id == "R-001":
-        cuerpo = (
-            "La solución garantiza liquidación de fondos final e irrevocable en tiempo real "
-            "entre los miembros del servicio RTGS, de forma continua [1]."
-        )
-    elif req_id == "R-038":
-        cuerpo = (
-            "El sistema RTGS de Montran se ha mejorado con capacidades para funcionar 24/7 [1]. "
-            "El RTGS de Montran puede funcionar y procesar pagos de forma 24/7/365 [2]."
-        )
-    else:
-        cuerpo = ("Con la evidencia recuperada: " + " ".join(piezas[:3])).strip()
-        if not cuerpo:
-            cuerpo = ABSTENCION
-    return {"draft": cuerpo, "citations": citations, "abstain": False}
 
 
 def _verdict(req_id: str, user: str, rows: list[dict]) -> dict:
@@ -407,7 +470,6 @@ def _verdict(req_id: str, user: str, rows: list[dict]) -> dict:
         st = (row.get("statement") or "").lower()
         clave = st[:40]
         if clave and clave not in low and not all(w in low for w in st.split()[:4]):
-            # cobertura laxa: palabras distintivas
             tokens = [w for w in st.split() if len(w) > 4][:3]
             if tokens and not all(t in low for t in tokens):
                 missing.append(row.get("statement"))
@@ -421,7 +483,6 @@ def _verdict(req_id: str, user: str, rows: list[dict]) -> dict:
 
 
 def _pack(user: str) -> dict:
-    # El synthesizer recibe el estado serializado.
     status = "completed"
     if "verdict=fail" in user:
         status = "rejected_insufficient_evidence"

@@ -41,6 +41,8 @@ class RfpWorkflow:
             "replan": 0,
             "rol": "planner",
             "tokens_usados": 0,
+            "tool_rounds": 0,
+            "tool_sigs": [],
             "_traza": [],
         }
         salida = self.app.invoke(

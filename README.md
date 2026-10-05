@@ -41,6 +41,8 @@ pip install -e ".[dev]"
 
 Con GlobalProtect: en `.env` deja `LLM_BACKEND=auto` (o `h200`). El cliente pregunta `/v1/models`; no hay un id de modelo fijado en el código. Si el modelo rechaza `temperature`, se reintenta sin ella.
 
+Anti-thrash (importante en H200): `H200_ENABLE_THINKING=0`, presupuestos `TOOL_BUDGET_*` por rol, hand-off forzado cuando ya hay evidence/SQL, y draft determinista con literales del PDF si el modelo no emite JSON. El golden del slice es solo `R-001`, `R-038`, `R-057` (no R-018 con placeholders).
+
 Sin VPN: `LLM_BACKEND=simulated` (o `auto`, que cae solo). El grafo y el evaluador SQL siguen siendo los mismos.
 
 ### Código Java (más adelante, no este slice)
