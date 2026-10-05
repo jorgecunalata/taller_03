@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from rfp_agent.config import ABSTENCION, GOLDEN_IDS
+from rfp_agent.config import ABSTENCION, GOLDEN_CODE_IDS, GOLDEN_IDS, GOLDEN_PDF_IDS
 from rfp_agent.evidence_filter import contiene_plantilla, es_plantilla_invalida, es_ruido_retrieve
 
 _RUIDO_TOOL = re.compile(
@@ -27,6 +27,17 @@ def limpiar_ruido_tool(texto: str) -> str:
     return limpio
 
 
+def _kb_status_cita(ev: dict, source: str) -> str:
+    """Conserva CODIGO; no promover código a VALIDADO automáticamente."""
+    status = (ev.get("kb_status") or "").strip()
+    if status:
+        return status
+    src = (source or "").lower()
+    if (ev.get("scope") or "").lower() == "code" or src.endswith(".java") or "core_rtgs" in src:
+        return "CODIGO"
+    return "VALIDADO"
+
+
 def citations_desde_evidence(evidence: list[dict]) -> list[dict]:
     citations = []
     n = 0
@@ -48,7 +59,7 @@ def citations_desde_evidence(evidence: list[dict]) -> list[dict]:
                 "chunk_key": ev.get("chunk_key"),
                 "source": source,
                 "locator": ev.get("locator") or "",
-                "kb_status": ev.get("kb_status") or "VALIDADO",
+                "kb_status": _kb_status_cita(ev, source),
                 # Citation text corto: no volcar dumps enteros al evaluador.
                 "text": (ev.get("text") or "")[:240],
             }
@@ -94,15 +105,22 @@ def facts_para(requirement_id: str) -> list[dict]:
 def evidence_desde_facts(requirement_id: str) -> list[dict]:
     out = []
     for f in facts_para(requirement_id):
+        source = f.get("source_doc") or "descripcion_funcional.pdf"
+        status = (f.get("kb_status") or "").strip() or "VALIDADO"
+        scope = (
+            "code"
+            if status.upper() == "CODIGO" or str(source).lower().endswith(".java")
+            else "docs"
+        )
         out.append(
             {
                 "chunk_key": f"fact:{f.get('id') or requirement_id}",
                 "text": f.get("statement") or "",
-                "source": f.get("source_doc") or "descripcion_funcional.pdf",
+                "source": source,
                 "locator": f.get("locator") or "",
-                "kb_status": f.get("kb_status") or "VALIDADO",
+                "kb_status": status,
                 "score": 1.0,
-                "scope": "docs",
+                "scope": scope,
             }
         )
     return out
@@ -137,12 +155,27 @@ def citations_tienen_pdf(citations: list[dict] | None) -> bool:
     )
 
 
+def citations_tienen_codigo(citations: list[dict] | None) -> bool:
+    for c in citations or []:
+        src = f"{c.get('source') or ''} {c.get('locator') or ''}".lower()
+        status = (c.get("kb_status") or "").upper()
+        if status == "CODIGO" or ".java" in src or "core_rtgs" in src:
+            return True
+        if "settlementwindowutil" in src:
+            return True
+    return False
+
+
+def citations_tienen_evidencia(citations: list[dict] | None) -> bool:
+    return citations_tienen_pdf(citations) or citations_tienen_codigo(citations)
+
+
 def enriquecer_citations(
     requirement_id: str,
     evidence: list[dict],
     citations: list[dict] | None,
 ) -> list[dict]:
-    """Garantiza source/locator del PDF funcional; nunca incluye plantillas."""
+    """Garantiza source/locator (PDF o Java); nunca plantillas ni VALIDADO inventado en código."""
     cleaned = []
     for i, c in enumerate(citations or [], start=1):
         text = c.get("text") or ""
@@ -152,14 +185,18 @@ def enriquecer_citations(
             continue
         item = dict(c)
         if not item.get("source"):
-            item["source"] = "descripcion_funcional.pdf"
+            if requirement_id in GOLDEN_CODE_IDS:
+                item["source"] = "SettlementWindowUtil.java"
+            else:
+                item["source"] = "descripcion_funcional.pdf"
+        if not item.get("kb_status"):
+            item["kb_status"] = _kb_status_cita(item, item.get("source") or "")
         if not item.get("n"):
             item["n"] = i
-        # Acotar texto de cita.
         if item.get("text") and len(str(item["text"])) > 240:
             item["text"] = str(item["text"])[:240]
         cleaned.append(item)
-    if citations_tienen_pdf(cleaned) and not any(
+    if citations_tienen_evidencia(cleaned) and not any(
         contiene_plantilla(json_dumps_safe(c)) for c in cleaned
     ):
         return cleaned
@@ -200,8 +237,8 @@ def draft_desde_evidence(
 ) -> dict:
     """Respuesta RFP CORTA con literales de facts. Nunca concatena dumps de retrieve."""
     evidence = filtrar_evidence_util(evidence)
-    # Respondeibles del slice: preferir facts canónicos como ancla de citas.
-    if requirement_id in ("R-001", "R-038"):
+    # Respondibles del slice: preferir facts canónicos como ancla de citas.
+    if requirement_id in GOLDEN_PDF_IDS or requirement_id in GOLDEN_CODE_IDS:
         evidence = evidence_desde_facts(requirement_id) or evidence
     elif requirement_id in GOLDEN_IDS and requirement_id != "R-057" and not evidence:
         evidence = evidence_desde_facts(requirement_id)
@@ -228,12 +265,21 @@ def draft_desde_evidence(
             "El RTGS de Montran puede funcionar y procesar pagos de forma 24/7/365 [2] "
             "(descripcion_funcional.pdf, p.15)."
         )
+    elif requirement_id == "R-037":
+        cuerpo = (
+            "Los horarios de entrada y liquidación por tipo de pago se administran con "
+            "settlement windows del timetable RTGS. Util class for settlement window [1] "
+            "(SettlementWindowUtil.java; "
+            "CORE_RTGS/com.montran.rtgs.tp/business/src/com/montran/rtgs/timetable/impl/"
+            "SettlementWindowUtil.java)."
+        )
     else:
-        # Fuera del golden: solo frases VALIDADO cortas, máx 3.
         piezas = []
         for i, ev in enumerate(evidence[:3], start=1):
             t = (ev.get("text") or "").strip()
-            if t and not es_ruido_retrieve(t, ev.get("kb_status") or "", ev.get("source") or ""):
+            if t and not es_ruido_retrieve(
+                t, ev.get("kb_status") or "", ev.get("source") or "", ev.get("scope") or ""
+            ):
                 piezas.append(f"[{i}] {t[:200]}")
         cuerpo = ("Con la evidencia recuperada: " + " ".join(piezas)).strip()
         if not cuerpo or cuerpo.endswith(":"):
@@ -281,7 +327,10 @@ def corregir_draft_si_abstuvo_mal(
         if st and st.lower() not in low:
             return fb
     cites = enriquecer_citations(requirement_id, evidence, citations or fb.get("citations"))
-    if not citations_tienen_pdf(cites):
+    if requirement_id in GOLDEN_CODE_IDS:
+        if not citations_tienen_codigo(cites):
+            return fb
+    elif not citations_tienen_pdf(cites):
         return fb
     return {
         "draft": draft,

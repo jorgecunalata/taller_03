@@ -275,10 +275,21 @@ class SimulatedLLM:
                 return self._tool("get_requirement", {"requirement_id": req_id})
             if "list_sources" in names and not any("qdrant" in json.dumps(o) for o in obs):
                 return self._tool("list_sources", {})
+            from rfp_agent.config import GOLDEN_CODE_IDS
+
+            ruta = "code" if req_id in GOLDEN_CODE_IDS else "docs"
+            objetivo = (
+                "Recuperar evidencia Java (settlement window / timetable) del CAG"
+                if ruta == "code"
+                else "Recuperar evidencia del PDF funcional"
+            )
             plan = {
-                "ruta": "docs",
+                "ruta": ruta,
                 "plan": [
-                    {"paso": "leer_docs", "objetivo": "Recuperar evidencia del PDF funcional"},
+                    {
+                        "paso": "leer_codigo" if ruta == "code" else "leer_docs",
+                        "objetivo": objetivo,
+                    },
                     {"paso": "verificar_sql", "objetivo": f"Contrastar facts WHERE req_id = '{req_id}'"},
                 ],
                 "sql_checks": [
@@ -288,6 +299,7 @@ class SimulatedLLM:
                     "No inventar TPS ni cifras",
                     "Ignorar [[RELLENAR]] y EJEMPLO_NO_VALIDADO",
                     "kb_status debe viajar en la evidencia",
+                    "No marcar código como VALIDADO automáticamente",
                 ],
             }
             return {"role": "assistant", "content": json.dumps(plan, ensure_ascii=False)}
@@ -296,10 +308,25 @@ class SimulatedLLM:
             if "retrieve_knowledge" in names and not any(
                 isinstance(o, dict) and o.get("hits") is not None for o in obs
             ):
+                from rfp_agent.config import GOLDEN_CODE_IDS
+
                 q = texto or user
                 scope = "docs"
-                if any(w in (texto or user).lower() for w in ("clase", "java", "método", "core_")):
-                    scope = "both"
+                low = (texto or user).lower()
+                if req_id in GOLDEN_CODE_IDS or any(
+                    w in low
+                    for w in (
+                        "clase",
+                        "java",
+                        "método",
+                        "core_",
+                        "settlement",
+                        "timetable",
+                        "ventana",
+                        "horario",
+                    )
+                ):
+                    scope = "code" if req_id in GOLDEN_CODE_IDS else "both"
                 return self._tool("retrieve_knowledge", {"query": q, "scope": scope, "k": 5})
             hits = []
             for o in obs:

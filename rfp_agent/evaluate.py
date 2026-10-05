@@ -51,6 +51,31 @@ def _citas_pdf(citations: list, evidence: list, answer: str = "") -> bool:
     return False
 
 
+def _es_hecho_codigo(row: dict) -> bool:
+    status = (row.get("kb_status") or "").upper()
+    source = (row.get("source_doc") or row.get("source") or "").lower()
+    locator = (row.get("locator") or "").lower()
+    return status == "CODIGO" or source.endswith(".java") or ".java" in locator
+
+
+def _citas_codigo(citations: list, evidence: list, answer: str = "") -> bool:
+    """Acepta ancla Java: .java, path core_rtgs, o kb_status=CODIGO."""
+    for c in citations or []:
+        src = f"{c.get('source') or ''} {c.get('locator') or ''}".lower()
+        status = (c.get("kb_status") or "").upper()
+        if status == "CODIGO" or ".java" in src or "core_rtgs" in src:
+            return True
+        if "settlementwindowutil" in src:
+            return True
+    for e in evidence or []:
+        src = f"{e.get('source') or ''} {e.get('locator') or ''}".lower()
+        status = (e.get("kb_status") or "").upper()
+        if status == "CODIGO" or ".java" in src or "core_rtgs" in src:
+            return True
+    blob = (answer or "").lower()
+    return ".java" in blob or "settlementwindowutil" in blob or "core_rtgs" in blob
+
+
 def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
     answer = paquete.get("answer") or ""
     citations = paquete.get("citations") or []
@@ -71,7 +96,10 @@ def evaluar_paquete(item: dict, paquete: dict, facts_rows: list[dict]) -> dict:
         for row in facts_rows:
             if not _cubre(answer, citations, row.get("statement") or ""):
                 fallos.append(f"falta_hecho:{row.get('statement')}")
-        if not _citas_pdf(citations, evidence, answer):
+        if any(_es_hecho_codigo(r) for r in facts_rows):
+            if not _citas_codigo(citations, evidence, answer):
+                fallos.append("falta_cita_codigo")
+        elif not _citas_pdf(citations, evidence, answer):
             fallos.append("falta_cita_pdf")
     ok = not fallos
     return {

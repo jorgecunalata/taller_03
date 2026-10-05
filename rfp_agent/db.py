@@ -1,6 +1,6 @@
-"""Carga rfp.xlsx → rfp_items (R-001…R-174) y anota el golden de tres ítems.
+"""Carga rfp.xlsx → rfp_items (R-001…R-174) y anota el golden del slice.
 
-Golden del primer slice: solo R-001, R-038, R-057.
+Golden: R-001/R-038 (PDF), R-037 (Java/CAG settlement window), R-057 (abstención TPS).
 R-018 y cualquier placeholder se filtran siempre en load-db / ensure_loaded.
 """
 from __future__ import annotations
@@ -63,6 +63,15 @@ _GOLDEN_ROWS_RAW = [
         "notas": "Frase del PDF funcional, no del xlsx.",
     },
     {
+        "id": "R-037",
+        "respondible": 1,
+        "sql_verificacion": "SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-037'",
+        "notas": (
+            "Código Java/CAG: SettlementWindowUtil (core_rtgs timetable). "
+            "Hit retrieve scope=code; kb_status=CODIGO (no VALIDADO automático)."
+        ),
+    },
+    {
         "id": "R-038",
         "respondible": 1,
         "sql_verificacion": "SELECT statement, source_doc, locator FROM facts WHERE req_id = 'R-038'",
@@ -84,6 +93,18 @@ _FACTS_ROWS_RAW = [
         "source_doc": "descripcion_funcional.pdf",
         "locator": "p.11",
         "kb_status": "VALIDADO",
+    },
+    {
+        "id": "F-037",
+        "req_id": "R-037",
+        # Literal del hit retrieve_knowledge(scope=code): SettlementWindowUtil.java
+        "statement": "Util class for settlement window",
+        "source_doc": "SettlementWindowUtil.java",
+        "locator": (
+            "CORE_RTGS/com.montran.rtgs.tp/business/src/com/montran/rtgs/timetable/impl/"
+            "SettlementWindowUtil.java"
+        ),
+        "kb_status": "CODIGO",
     },
     {
         "id": "F-038a",

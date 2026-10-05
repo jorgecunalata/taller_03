@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="Corre el grafo sobre un R-nnn")
     r.add_argument("requirement_id")
 
-    e = sub.add_parser("eval-rfp", help="Evalúa solo el golden (R-001, R-038, R-057)")
+    e = sub.add_parser("eval-rfp", help=f"Evalúa solo el golden ({', '.join(GOLDEN_IDS)})")
     e.add_argument("--ids", nargs="*", default=list(GOLDEN_IDS))
 
     args = p.parse_args(argv)
@@ -117,10 +117,10 @@ def main(argv: list[str] | None = None) -> int:
             "db_exists": Path(info["db"]).exists(),
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        if snap["golden_count"] != 3 or set(snap["golden_ids"]) != set(GOLDEN_IDS):
+        if snap["golden_count"] != len(GOLDEN_IDS) or set(snap["golden_ids"]) != set(GOLDEN_IDS):
             print(
-                "ERROR: golden debe ser exactamente R-001, R-038, R-057. "
-                f"Ahora: {snap['golden_ids']}. ¿Estás en cursor/h200-eval-rfp-fix-59e8?",
+                f"ERROR: golden debe ser exactamente {list(GOLDEN_IDS)}. "
+                f"Ahora: {snap['golden_ids']}.",
                 file=sys.stderr,
             )
             return 1

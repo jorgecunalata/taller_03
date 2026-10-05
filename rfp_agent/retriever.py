@@ -57,6 +57,22 @@ STUB_CHUNKS = [
         "kb_status": "VALIDADO",
         "scope": "docs",
     },
+    {
+        "chunk_key": (
+            "code:CORE_RTGS/com.montran.rtgs.tp/business/src/com/montran/rtgs/timetable/impl/"
+            "SettlementWindowUtil.java::clase"
+        ),
+        "text": "Util class for settlement window",
+        "source": "SettlementWindowUtil.java",
+        "locator": (
+            "CORE_RTGS/com.montran.rtgs.tp/business/src/com/montran/rtgs/timetable/impl/"
+            "SettlementWindowUtil.java"
+        ),
+        "kb_status": "CODIGO",
+        "scope": "code",
+        "class": "SettlementWindowUtil",
+        "project": "core_rtgs",
+    },
 ]
 
 
@@ -185,14 +201,30 @@ def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
         return None
 
 
+def _scope_de_fact(row) -> str:
+    status = (row["kb_status"] or "").upper()
+    source = (row["source_doc"] or "").lower()
+    locator = (row["locator"] or "").lower()
+    if status == "CODIGO" or source.endswith(".java") or ".java" in locator:
+        return "code"
+    return "docs"
+
+
 def _buscar_stub(query: str, scope: str, k: int) -> list[dict]:
     ensure_loaded()
     q = normalizar(query)
     tokens = [t for t in q.split() if len(t) > 3]
-    candidatos = [c for c in STUB_CHUNKS if scope in ("docs", "both") or c["scope"] == scope]
+    candidatos = []
+    for c in STUB_CHUNKS:
+        cs = c.get("scope") or "docs"
+        if scope == "both" or cs == scope:
+            candidatos.append(c)
     conn = connect_rfp()
     try:
         for row in conn.execute("SELECT * FROM facts"):
+            fact_scope = _scope_de_fact(row)
+            if scope not in ("both", fact_scope):
+                continue
             candidatos.append(
                 {
                     "chunk_key": f"fact:{row['id']}",
@@ -200,7 +232,7 @@ def _buscar_stub(query: str, scope: str, k: int) -> list[dict]:
                     "source": row["source_doc"],
                     "locator": row["locator"],
                     "kb_status": row["kb_status"],
-                    "scope": "docs",
+                    "scope": fact_scope,
                 }
             )
     finally:
@@ -210,13 +242,18 @@ def _buscar_stub(query: str, scope: str, k: int) -> list[dict]:
     for c in candidatos:
         if es_plantilla_invalida(c.get("text") or "", c.get("kb_status") or "", c.get("source") or ""):
             continue
-        blob = normalizar(c["text"] + " " + (c.get("source") or ""))
+        blob = normalizar(
+            c["text"] + " " + (c.get("source") or "") + " " + (c.get("locator") or "")
+        )
         score = sum(1 for t in tokens if t in blob)
         if "24/7" in query or "24x7" in q or "24 x 7" in q:
             if "24/7" in c["text"]:
                 score += 3
         if "irrevoc" in q and "irrevoc" in blob:
             score += 3
+        if "settlement" in q or "timetable" in q or "ventana" in q or "horario" in q:
+            if "settlement" in blob or "timetable" in blob:
+                score += 3
         if "tps" in q or "capacidad maxima" in q or "transaccional" in q:
             score += 0
         puntuados.append((score, c))
@@ -240,11 +277,18 @@ def retrieve_knowledge(query: str, scope: str = "both", k: int = 5) -> list[dict
     k = max(1, min(int(k or 5), 12))
     hits = _buscar_qdrant(query, scope, k)
     if hits is not None:
-        # Si Qdrant solo devolvió basura filtrada, caer al stub documental.
-        if not hits and scope in ("docs", "both"):
-            return _buscar_stub(query, "docs", k)
-        return hits
+        if not hits and scope in ("docs", "both", "code"):
+            stub = _buscar_stub(query, "docs" if scope == "docs" else scope, k)
+            if stub:
+                return stub
+            if scope == "docs":
+                return []
+        if hits:
+            return hits
     if scope == "code":
+        stub = _buscar_stub(query, "code", k)
+        if stub:
+            return stub
         return [
             {
                 "chunk_key": "code:unavailable",

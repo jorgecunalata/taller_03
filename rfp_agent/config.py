@@ -129,9 +129,12 @@ TOOL_BUDGET_POR_ROL = {
 
 ABSTENCION = "El corpus no contiene información suficiente."
 
-# Primer slice: SOLO estos tres. R-018 y otros quedan fuera aunque alguien los pegue en db.py.
-GOLDEN_IDS = ("R-001", "R-038", "R-057")
+# Golden: PDF (R-001, R-038), abstención (R-057) y código Java/CAG (R-037).
+# R-018 y placeholders quedan fuera aunque alguien los pegue en db.py.
+GOLDEN_IDS = ("R-001", "R-037", "R-038", "R-057")
 FORBIDDEN_GOLDEN_IDS = frozenset({"R-018"})
+GOLDEN_PDF_IDS = frozenset({"R-001", "R-038"})
+GOLDEN_CODE_IDS = frozenset({"R-037"})
 
 EMBED_OLLAMA_NAME = "bge-m3"
 EMBED_MODEL = "BAAI/bge-m3"
@@ -140,12 +143,13 @@ EMBED_MAX_TOKENS = 8192
 
 
 def resolve_child(parent: Path, name: str) -> Path | None:
-    """Resuelve un hijo por nombre sin distinguir mayúsculas (APFS/HFS)."""
+    """Resuelve un hijo por nombre sin distinguir mayúsculas (APFS/HFS).
+
+    Siempre itera el directorio real: en FS case-insensitive, `parent / name`
+    puede `.exists()` con el casing del argumento, no el del disco.
+    """
     if not parent.exists():
         return None
-    direct = parent / name
-    if direct.exists():
-        return direct
     target = name.lower()
     try:
         for child in parent.iterdir():

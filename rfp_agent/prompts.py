@@ -21,15 +21,17 @@ Ignora plantillas EJEMPLO_NO_VALIDADO / [[RELLENAR]] como dato de cumplimiento.
 Cuando ya tengas evidencia, responde SOLO JSON:
 {"handoff":"writer","n_hits":N,"objetivo":"Redactar solo con evidence[]"}"""
 
-WRITER = """Eres el Writer. Redactas el apartado RFP SOLO con evidence[] VALIDADO.
-NUNCA copies dumps crudos de retrieve, código Java/XML, ni plantillas
+WRITER = """Eres el Writer. Redactas el apartado RFP SOLO con evidence[] usable
+(VALIDADO para PDF; CODIGO para Java verificado). No marques código como VALIDADO.
+NUNCA copies dumps crudos de retrieve, código Java/XML completo, ni plantillas
 EJEMPLO_NO_VALIDADO / [[RELLENAR]] al draft. La respuesta debe ser CORTA (≤ 5 oraciones).
 Ancla citas con record_evidence: UNA sola ronda de tools (puedes emitir varias
 llamadas record_evidence en paralelo). Después emite el JSON draft.
-Citas en el texto como [n] con source descripcion_funcional.pdf.
+Citas en el texto como [n] con source (PDF o .java) y locator (p.N o path/clase).
 No inventes cifras (TPS, ISO, SLA). Si el requisito pide capacidad/TPS, abstente con exactamente:
 El corpus no contiene información suficiente.
 Para R-001 incluye: Liquidación de fondos final e irrevocable en tiempo real
+Para R-037 incluye: Util class for settlement window (SettlementWindowUtil)
 Para R-038 incluye ambas frases 24/7 y 24/7/365.
 Responde SOLO JSON:
 {"draft":"...","citations":[{"n":1,"chunk_key":"...","source":"...","locator":"...","kb_status":"...","text":"..."}],"abstain":false}"""

@@ -1,13 +1,13 @@
 # Taller 3 — respuesta automatizada de RFP (primer slice)
 
-Grafo **LangGraph 1.2.12** con cinco agentes (Planner, Reader, Writer, Verifier, Output Synthesizer) y un servidor MCP simulado. El evaluador puntúa **solo tres ítems golden** con SQL, no las 174 filas del Excel y no con un LLM-as-judge.
+Grafo **LangGraph 1.2.12** con cinco agentes (Planner, Reader, Writer, Verifier, Output Synthesizer) y un servidor MCP simulado. El evaluador puntúa **solo los ítems golden** con SQL, no las 174 filas del Excel y no con un LLM-as-judge.
 
 En el Mac del estudiante este repo vive en `taller_3/` junto a `demo_ats/`. El default `DEMO_ATS=./demo_ats` apunta ahí. **El primer slice no necesita el árbol Java** ni Qdrant: `retrieve_knowledge` usa un stub de facts + citas del PDF funcional.
 
 ## Qué hace este corte
 
 - Carga `data/rfp.xlsx` → SQLite `rfp_items` con ids `R-001`…`R-174`.
-- Golden (`in_golden=1`): `R-001` y `R-038` (respondibles, frases del PDF) y `R-057` (abstención: no hay TPS).
+- Golden (`in_golden=1`): `R-001`/`R-038` (PDF), `R-037` (Java/CAG settlement window, `CODIGO`) y `R-057` (abstención: no hay TPS).
 - MCP: `retrieve_knowledge`, `get_requirement`, `query_facts`, `record_evidence` (+ `list_sources` para el criterio N+1).
 - LLM: H200 `http://172.28.230.10:12555/v1` (chat) y `:11434` (`bge-m3`) si hay VPN; si no, el mismo grafo corre con un LLM simulado.
 
@@ -44,7 +44,7 @@ pip install -e ".[dev]"
 
 Con GlobalProtect: en `.env` deja `LLM_BACKEND=auto` (o `h200`). El cliente pregunta `/v1/models`; no hay un id de modelo fijado en el código. Si el modelo rechaza `temperature`, se reintenta sin ella.
 
-Anti-thrash (importante en H200): `H200_ENABLE_THINKING=0`, presupuestos `TOOL_BUDGET_*` por rol, hand-off forzado cuando ya hay evidence/SQL, y draft determinista con literales del PDF si el modelo no emite JSON. El golden del slice es solo `R-001`, `R-038`, `R-057` (no R-018 con placeholders).
+Anti-thrash (importante en H200): `H200_ENABLE_THINKING=0`, presupuestos `TOOL_BUDGET_*` por rol, hand-off forzado cuando ya hay evidence/SQL, y draft determinista con literales del PDF/código si el modelo no emite JSON. Golden: `R-001`, `R-037`, `R-038`, `R-057` (no R-018; código como `CODIGO`, no `VALIDADO` automático).
 
 Sin VPN: `LLM_BACKEND=simulated` (o `auto`, que cae solo). El grafo y el evaluador SQL siguen siendo los mismos.
 

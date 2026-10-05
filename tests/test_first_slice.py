@@ -37,8 +37,9 @@ def _db(tmp_path_factory):
     yield
 
 
-def test_carga_174_y_tres_golden():
+def test_carga_174_y_golden_slice():
     assert get_item("R-001")["excel_row"] == 2
+    assert get_item("R-037") is not None
     assert get_item("R-174") is not None
     assert get_item("R-175") is None
     from rfp_agent.db import connect_rfp
@@ -47,10 +48,19 @@ def test_carga_174_y_tres_golden():
     n = conn.execute("SELECT COUNT(*) FROM rfp_items").fetchone()[0]
     g = conn.execute("SELECT COUNT(*) FROM rfp_items WHERE in_golden=1").fetchone()[0]
     ids = [r[0] for r in conn.execute("SELECT id FROM rfp_items WHERE in_golden=1").fetchall()]
+    f037 = conn.execute(
+        "SELECT statement, source_doc, locator, kb_status FROM facts WHERE req_id='R-037'"
+    ).fetchone()
     conn.close()
     assert n == 174
-    assert g == 3
+    assert g == len(GOLDEN_IDS)
     assert set(ids) == set(GOLDEN_IDS)
+    assert f037 is not None
+    assert f037["kb_status"] == "CODIGO"
+    assert f037["kb_status"] != "VALIDADO"
+    assert f037["source_doc"] == "SettlementWindowUtil.java"
+    assert "SettlementWindowUtil.java" in f037["locator"]
+    assert f037["statement"] == "Util class for settlement window"
 
 
 def test_mcp_cuatro_tools_y_n_mas_uno():
@@ -92,17 +102,19 @@ def test_no_create_react_agent():
     assert "StateGraph" in src
 
 
-def test_eval_rfp_tres_golden():
+def test_eval_rfp_golden_slice():
     resumen = eval_rfp()
-    assert resumen["n"] == 3
+    assert resumen["n"] == len(GOLDEN_IDS)
     by_id = {i["id"]: i for i in resumen["items"]}
     assert "R-018" not in by_id
     assert by_id["R-001"]["pass"]
+    assert by_id["R-037"]["pass"]
     assert by_id["R-038"]["pass"]
     assert by_id["R-057"]["pass"]
     assert ABSTENCION.lower() in by_id["R-057"]["answer"].lower()
+    assert "settlement window" in by_id["R-037"]["answer"].lower()
     assert resumen["failed"] == 0
-    for rid in ("R-001", "R-038", "R-057"):
+    for rid in GOLDEN_IDS:
         assert by_id[rid]["status"] == "completed"
 
 
@@ -160,8 +172,9 @@ def test_purge_r018_from_sqlite():
     assert set(ids) == set(GOLDEN_IDS)
 
     info = load_rfp()
-    assert info["golden"] == 3
+    assert info["golden"] == len(GOLDEN_IDS)
     assert "R-018" not in info["golden_ids"]
+    assert "R-037" in info["golden_ids"]
 
 
 def test_reader_cierra_sin_quemar_pasos():
@@ -214,6 +227,12 @@ def test_draft_incluye_hechos_golden():
     )
     low = d38["draft"].lower()
     assert "24/7" in low and "24/7/365" in low
+    d37 = draft_desde_evidence("R-037", "horarios liquidación tipos de pago", [])
+    assert "util class for settlement window" in d37["draft"].lower()
+    cite_blob = json.dumps(d37["citations"], ensure_ascii=False)
+    assert "SettlementWindowUtil.java" in cite_blob
+    assert "CODIGO" in cite_blob
+    assert "VALIDADO" not in cite_blob
     d57 = draft_desde_evidence("R-057", "Capacidad máxima transaccional TPS", [])
     assert ABSTENCION.lower() in d57["draft"].lower()
 

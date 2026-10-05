@@ -10,6 +10,9 @@ from langgraph.graph import END, START, StateGraph
 from rfp_agent import prompts
 from rfp_agent.config import (
     ABSTENCION,
+    GOLDEN_CODE_IDS,
+    GOLDEN_IDS,
+    GOLDEN_PDF_IDS,
     MAX_PASOS,
     MAX_REPLAN,
     TOKEN_BUDGET,
@@ -423,11 +426,15 @@ def construir_grafo(cliente: ClienteMCP):
             except json.JSONDecodeError:
                 args = {}
             nombre = tc["function"]["name"]
-            # Primer slice golden: no mezclar código/plantillas vía scope=both|code.
-            if nombre == "retrieve_knowledge" and rid in ("R-001", "R-038", "R-057"):
+            # Golden PDF → docs; golden código → code; no mezclar plantillas.
+            if nombre == "retrieve_knowledge":
                 args = dict(args)
-                args["scope"] = "docs"
-                args["k"] = min(int(args.get("k") or 5), 5)
+                if rid in GOLDEN_PDF_IDS or rid == "R-057":
+                    args["scope"] = "docs"
+                    args["k"] = min(int(args.get("k") or 5), 5)
+                elif rid in GOLDEN_CODE_IDS:
+                    args["scope"] = "code"
+                    args["k"] = min(int(args.get("k") or 5), 5)
             obs = cliente.invocar(nombre, args)
             # Filtrar hits basura antes de meterlos en el historial/evidence.
             if isinstance(obs, dict) and isinstance(obs.get("hits"), list):
@@ -506,7 +513,7 @@ def construir_grafo(cliente: ClienteMCP):
         )
         if not (answer or "").strip() or ABSTENCION.lower() in (answer or "").lower():
             rid = estado.get("requirement_id") or ""
-            if rid in ("R-001", "R-038") or not (answer or "").strip():
+            if rid in GOLDEN_PDF_IDS or rid in GOLDEN_CODE_IDS or not (answer or "").strip():
                 answer = fb.get("draft") or answer or ABSTENCION
                 citations = fb.get("citations") or citations
         answer = limpiar_ruido_tool(answer or "")
@@ -565,7 +572,7 @@ def construir_grafo(cliente: ClienteMCP):
     def nodo_emergencia(estado: Estado) -> dict:
         datos = _salida_forzada("synthesizer", estado)
         if not (estado.get("draft") or "").strip() or (
-            estado.get("requirement_id") in ("R-001", "R-038")
+            estado.get("requirement_id") in (GOLDEN_PDF_IDS | GOLDEN_CODE_IDS)
             and ABSTENCION.lower() in (estado.get("draft") or "").lower()
         ):
             fb = draft_desde_evidence(
@@ -674,7 +681,7 @@ def _aplicar_salida(rol: str, estado: Estado, datos: dict, mensajes: list[dict])
         )
         # Si forzamos respuesta limpia del golden, no heredamos rejected por plantillas viejas.
         rid = estado.get("requirement_id") or ""
-        if rid in ("R-001", "R-038", "R-057"):
+        if rid in GOLDEN_IDS:
             st = "completed"
         else:
             st = datos.get("status") or "completed"
