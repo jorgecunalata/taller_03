@@ -1,4 +1,8 @@
-"""Carga rfp.xlsx → rfp_items (R-001…R-174) y anota el golden de tres ítems."""
+"""Carga rfp.xlsx → rfp_items (R-001…R-174) y anota el golden de tres ítems.
+
+Golden del primer slice: solo R-001, R-038, R-057.
+No añadir R-018 (ni otros) con placeholders tipo "<exact phrase copied from the PDF>".
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -175,10 +179,15 @@ def ensure_loaded() -> None:
         ).fetchone()[0]
         if n == 0:
             load_rfp()
-            return
-        count = conn.execute("SELECT COUNT(*) FROM rfp_items").fetchone()[0]
-        if count != 174:
-            load_rfp()
+        else:
+            count = conn.execute("SELECT COUNT(*) FROM rfp_items").fetchone()[0]
+            golden_ids = {
+                r[0]
+                for r in conn.execute("SELECT id FROM golden").fetchall()
+            }
+            # Reescribe si el corpus cambió o si quedó un golden espurio (p.ej. R-018 placeholder).
+            if count != 174 or golden_ids != set(GOLDEN_IDS):
+                load_rfp()
     except sqlite3.Error:
         load_rfp()
     finally:

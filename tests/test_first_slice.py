@@ -1,6 +1,7 @@
 """Tests del primer slice: carga 174, MCP, grafo simulado, eval SQL."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -95,11 +96,14 @@ def test_eval_rfp_tres_golden():
     resumen = eval_rfp()
     assert resumen["n"] == 3
     by_id = {i["id"]: i for i in resumen["items"]}
+    assert "R-018" not in by_id
     assert by_id["R-001"]["pass"]
     assert by_id["R-038"]["pass"]
     assert by_id["R-057"]["pass"]
     assert ABSTENCION.lower() in by_id["R-057"]["answer"].lower()
     assert resumen["failed"] == 0
+    for rid in ("R-001", "R-038", "R-057"):
+        assert by_id[rid]["status"] == "completed"
 
 
 def test_grafo_cinco_roles():
@@ -109,5 +113,56 @@ def test_grafo_cinco_roles():
     for rol in ("planner", "reader", "writer", "verifier", "synthesizer"):
         assert rol in nodos
     assert out["status"] == "completed"
+    assert out["pasos"] < out["max_pasos"]
     tools = wf.cliente.descubrir()
     assert len(tools) >= 4
+
+
+def test_sin_r018_en_golden_config():
+    from rfp_agent import db as db_mod
+    from rfp_agent.config import GOLDEN_IDS
+
+    assert "R-018" not in GOLDEN_IDS
+    assert all(g["id"] != "R-018" for g in db_mod.GOLDEN_ROWS)
+    assert all(f["req_id"] != "R-018" for f in db_mod.FACTS_ROWS)
+
+
+def test_normalize_assistant_thinking_and_embedded_tools():
+    from rfp_agent.llm import normalize_assistant_message
+
+    m = normalize_assistant_message(
+        {
+            "role": "assistant",
+            "content": (
+                "<think>voy a llamar</think>"
+                '<tool_call>{"name":"retrieve_knowledge","arguments":{"query":"24/7","scope":"docs"}}</tool_call>'
+            ),
+        }
+    )
+    assert m.get("tool_calls")
+    assert m["tool_calls"][0]["function"]["name"] == "retrieve_knowledge"
+    args = json.loads(m["tool_calls"][0]["function"]["arguments"])
+    assert args["query"] == "24/7"
+
+
+def test_draft_incluye_hechos_golden():
+    from rfp_agent.drafting import draft_desde_evidence
+
+    d1 = draft_desde_evidence(
+        "R-001",
+        "liquidación",
+        [{"chunk_key": "k", "text": "Liquidación de fondos final e irrevocable en tiempo real", "source": "descripcion_funcional.pdf", "locator": "p.11", "kb_status": "VALIDADO"}],
+    )
+    assert "liquidación de fondos final e irrevocable en tiempo real" in d1["draft"].lower()
+    d38 = draft_desde_evidence(
+        "R-038",
+        "24x7",
+        [
+            {"chunk_key": "a", "text": "El sistema RTGS de Montran se ha mejorado con capacidades para funcionar 24/7", "source": "descripcion_funcional.pdf", "locator": "p.13", "kb_status": "VALIDADO"},
+            {"chunk_key": "b", "text": "El RTGS de Montran puede funcionar y procesar pagos de forma 24/7/365", "source": "descripcion_funcional.pdf", "locator": "p.15", "kb_status": "VALIDADO"},
+        ],
+    )
+    low = d38["draft"].lower()
+    assert "24/7" in low and "24/7/365" in low
+    d57 = draft_desde_evidence("R-057", "Capacidad máxima transaccional TPS", [])
+    assert ABSTENCION.lower() in d57["draft"].lower()

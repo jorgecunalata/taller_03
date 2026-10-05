@@ -43,13 +43,30 @@ H200_LLM_PORT = int(os.environ.get("H200_LLM_PORT", "12555"))
 H200_EMBED_PORT = int(os.environ.get("H200_EMBED_PORT", "11434"))
 H200_API_KEY = os.environ.get("H200_API_KEY", "local")
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "auto").lower()
+# Thinking + tools en vLLM suele quemar MAX_PASOS sin hand-off. Off por defecto.
+H200_ENABLE_THINKING = os.environ.get("H200_ENABLE_THINKING", "0").strip() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 MAX_PASOS = int(os.environ.get("MAX_PASOS", "20"))
 MAX_REPLAN = int(os.environ.get("MAX_REPLAN", "2"))
 TOKEN_BUDGET = int(os.environ.get("TOKEN_BUDGET", "80000"))
 QUERY_FACTS_ROW_LIMIT = int(os.environ.get("QUERY_FACTS_ROW_LIMIT", "50"))
 
+# Presupuesto de rondas tool→agente por rol (no triplica el global: corta thrashing H200).
+TOOL_BUDGET_POR_ROL = {
+    "planner": int(os.environ.get("TOOL_BUDGET_PLANNER", "2")),
+    "reader": int(os.environ.get("TOOL_BUDGET_READER", "2")),
+    "writer": int(os.environ.get("TOOL_BUDGET_WRITER", "1")),
+    "verifier": int(os.environ.get("TOOL_BUDGET_VERIFIER", "2")),
+    "synthesizer": int(os.environ.get("TOOL_BUDGET_SYNTHESIZER", "0")),
+}
+
 ABSTENCION = "El corpus no contiene información suficiente."
+# Primer slice: solo estos tres. No añadir R-018 sin frase literal real del PDF.
 GOLDEN_IDS = ("R-001", "R-038", "R-057")
 
 EMBED_OLLAMA_NAME = "bge-m3"
