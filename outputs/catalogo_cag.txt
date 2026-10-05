@@ -1,0 +1,9 @@
+core_rtgs: Núcleo RTGS: liquidación bruta en tiempo real.
+core_parser: Parsers de mensajería ISO 20022, SWIFT, UNIFI, ACH y RTGS.
+core: Framework base: seguridad, UI, integración y piezas comunes. No es un producto por sí mismo.
+core_bill: Facturación y comisiones.
+core_ats: Componentes compartidos de ATS (RTGS+ACH).
+core_ach: Núcleo ACH: compensación, clearing, cheques y sesiones.
+core_po_ats: Núcleo del Payment Originator.
+core_ms: Servicios / microservicios (si el árbol lo trae).
+paquete com.montran.rtgs: 3 fragmentos indexados en core_rtgs.

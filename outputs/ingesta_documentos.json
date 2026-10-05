@@ -1,0 +1,119 @@
+{
+  "corpus": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/corpus",
+  "corpus_exists": true,
+  "dirs": {
+    "corpus": {
+      "path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/corpus",
+      "exists": true,
+      "skipped": false
+    },
+    "corpus/docs": {
+      "path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/corpus/docs",
+      "exists": true,
+      "skipped": false
+    }
+  },
+  "files_seen": 8,
+  "files_indexed": 8,
+  "files_rejected": 0,
+  "pages": 214,
+  "chunks": 220,
+  "chunk_tokens": 512,
+  "overlap_tokens": 102,
+  "archivos": [
+    {
+      "archivo": "descripcion_funcional.pdf",
+      "nombre": "descripcion_funcional.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 156217,
+      "paginas": 65,
+      "chunks": 68,
+      "path": "descripcion_funcional.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 512
+    },
+    {
+      "archivo": "ISOcertificaciones.pdf",
+      "nombre": "ISOcertificaciones.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 31658,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "ISOcertificaciones.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 351
+    },
+    {
+      "archivo": "legal.pdf",
+      "nombre": "legal.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 31865,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "legal.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 342
+    },
+    {
+      "archivo": "seguridad.pdf",
+      "nombre": "seguridad.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 32279,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "seguridad.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 360
+    },
+    {
+      "archivo": "descripcion_funcional.pdf",
+      "nombre": "descripcion_funcional.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 156217,
+      "paginas": 65,
+      "chunks": 68,
+      "path": "docs/descripcion_funcional.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 512
+    },
+    {
+      "archivo": "ISOcertificaciones.pdf",
+      "nombre": "ISOcertificaciones.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 31658,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "docs/ISOcertificaciones.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 351
+    },
+    {
+      "archivo": "legal.pdf",
+      "nombre": "legal.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 31865,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "docs/legal.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 342
+    },
+    {
+      "archivo": "seguridad.pdf",
+      "nombre": "seguridad.pdf",
+      "estado": "indexado",
+      "caracteres_utiles": 32279,
+      "paginas": 14,
+      "chunks": 14,
+      "path": "docs/seguridad.pdf",
+      "kb_status": "VALIDADO",
+      "tokens_chunk_max": 360
+    }
+  ],
+  "collection": "documentos",
+  "qdrant_url": "http://localhost:6333",
+  "points_upserted": 220,
+  "embedding_backend": "h200",
+  "chunks_path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/outputs/doc_chunks.jsonl",
+  "ingesta_path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/outputs/ingesta_documentos.json"
+}

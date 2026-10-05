@@ -1,0 +1,100 @@
+{
+  "demo_ats": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats",
+  "demo_ats_exists": true,
+  "roots": {
+    "CORE": {
+      "canonical": "CORE",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE",
+      "exists": true,
+      "files": 1704,
+      "chunks": 10954,
+      "skipped": false,
+      "files_omitted": 4,
+      "chunks_indexed": 10954
+    },
+    "CORE_BILL": {
+      "canonical": "CORE_BILL",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_BILL",
+      "exists": true,
+      "files": 140,
+      "chunks": 832,
+      "skipped": false,
+      "files_omitted": 1,
+      "chunks_indexed": 832
+    },
+    "CORE_RTGS": {
+      "canonical": "CORE_RTGS",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_RTGS",
+      "exists": true,
+      "files": 1398,
+      "chunks": 7594,
+      "skipped": false,
+      "files_omitted": 0,
+      "chunks_indexed": 7594
+    },
+    "CORE_PO_ATS": {
+      "canonical": "CORE_PO_ATS",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_PO_ATS",
+      "exists": true,
+      "files": 1708,
+      "chunks": 7300,
+      "skipped": false,
+      "files_omitted": 2,
+      "chunks_indexed": 1708
+    },
+    "CORE_PARSER": {
+      "canonical": "CORE_PARSER",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_PARSER",
+      "exists": true,
+      "files": 500,
+      "chunks": 5037,
+      "skipped": false,
+      "files_omitted": 0,
+      "chunks_indexed": 2745
+    },
+    "CORE_MS": {
+      "canonical": "CORE_MS",
+      "resolved": null,
+      "exists": false,
+      "files": 0,
+      "chunks": 0,
+      "skipped": true,
+      "reason": "missing"
+    },
+    "CORE_ACH": {
+      "canonical": "CORE_ACH",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_ACH",
+      "exists": true,
+      "files": 993,
+      "chunks": 5682,
+      "skipped": false,
+      "files_omitted": 3,
+      "chunks_indexed": 993
+    },
+    "CORE_ATS": {
+      "canonical": "CORE_ATS",
+      "resolved": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/demo_ats/CORE_ATS",
+      "exists": true,
+      "files": 174,
+      "chunks": 532,
+      "skipped": false,
+      "files_omitted": 0,
+      "chunks_indexed": 174
+    }
+  },
+  "files_read": 6617,
+  "files_omitted": 10,
+  "chunks": 25000,
+  "chunks_clase_o_archivo": 6617,
+  "chunks_metodo": 18383,
+  "tope": 25000,
+  "truncated": true,
+  "collection": "montran_code",
+  "qdrant_url": "http://localhost:6333",
+  "points_upserted": 25076,
+  "catalog_lines": 76,
+  "catalog_tokens_approx": 1493,
+  "embedding_backend": "h200",
+  "chunks_path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/outputs/code_chunks.jsonl",
+  "catalog_path": "/Users/jcunalata/Documents/ia_generativa_agentes/taller_3/rfp_automated_response/outputs/catalogo_cag.txt"
+}
