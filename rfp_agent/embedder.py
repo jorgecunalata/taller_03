@@ -35,7 +35,7 @@ class EmbeddingsUnavailable(RuntimeError):
 
 def _mensaje_sin_embeddings() -> str:
     return (
-        "No hay embeddings disponibles para index-code.\n"
+        "No hay embeddings disponibles para index-code / index-docs.\n"
         f"  H200 Ollama bge-m3: http://{H200_HOST}:{H200_EMBED_PORT} "
         "(GlobalProtect + EMBEDDING_BACKEND=h200|auto).\n"
         "  Sin VPN: pip install 'sentence-transformers' torch && "

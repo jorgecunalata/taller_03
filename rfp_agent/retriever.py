@@ -145,11 +145,18 @@ def _buscar_qdrant(query: str, scope: str, k: int) -> list[dict] | None:
             hit_scope = "code" if nombre == COLLECTION_CODE else "docs"
             for p in resp.points:
                 payload = p.payload or {}
+                page = payload.get("page")
+                locator = payload.get("locator")
+                if not locator:
+                    if page is not None and page != "":
+                        locator = f"p.{page}" if not str(page).startswith("p.") else str(page)
+                    else:
+                        locator = payload.get("path") or ""
                 raw = {
                     "chunk_key": payload.get("chunk_key") or str(p.id),
                     "text": payload.get("text") or "",
                     "source": payload.get("doc_id") or payload.get("path") or nombre,
-                    "locator": payload.get("page") or payload.get("path") or "",
+                    "locator": locator,
                     "kb_status": payload.get("kb_status") or "DESCONOCIDO",
                     "score": float(p.score),
                     "scope": hit_scope,

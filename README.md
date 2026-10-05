@@ -24,8 +24,9 @@ python3 -m rfp_agent.cli load-db
 python3 -m rfp_agent.cli tools
 python3 -m rfp_agent.cli run R-001
 python3 -m rfp_agent.cli eval-rfp
-# CAG código (Qdrant + embeddings H200 o local):
-# python3 -m rfp_agent.cli index-code
+# Índices Qdrant (embeddings H200 o local):
+# python3 -m rfp_agent.cli index-docs   # corpus/ → documentos
+# python3 -m rfp_agent.cli index-code   # demo_ats → montran_code
 python3 -m pytest -q
 ```
 
@@ -47,6 +48,18 @@ Anti-thrash (importante en H200): `H200_ENABLE_THINKING=0`, presupuestos `TOOL_B
 
 Sin VPN: `LLM_BACKEND=simulated` (o `auto`, que cae solo). El grafo y el evaluador SQL siguen siendo los mismos.
 
+### Documentos (`index-docs`)
+
+Con Qdrant en `:6333` y embeddings H200 (o `EMBEDDING_BACKEND=local`):
+
+```bash
+python3 -m rfp_agent.cli index-docs
+```
+
+Indexa PDF (y `.docx` / `.md` / `.txt`) bajo `corpus/` y `corpus/docs/` hacia la colección Qdrant `documentos`. Chunking ~512/102 (Taller 2). El PDF funcional va como `kb_status=VALIDADO`; plantillas `.md` / `[[RELLENAR]]` / `EJEMPLO_NO_VALIDADO` **no** se promueven a VALIDADO (el retrieve las filtra). Omite `corpus/docs/` si no existe. Resumen: files / pages / chunks.
+
+`retrieve_knowledge` con `scope=docs|both` usa esa colección cuando está presente.
+
 ### Código Java / CAG (`index-code`)
 
 En el Mac, con `demo_ats` hermano (o symlink) y Qdrant en `:6333`:
@@ -59,7 +72,7 @@ python3 -m rfp_agent.cli index-code
 
 Indexa `.java` / `.xml` / `.properties` (y similares) bajo los `CODE_ROOTS` hacia la colección Qdrant `montran_code`. Omite raíces ausentes (p. ej. `CORE_MS`). Resuelve nombres sin distinguir mayúsculas (`core_rtgs` ≡ `CORE_RTGS`). No indexa por defecto `demo_ats_release`, `demo_po`, `core_runtime` ni el `demo_ats` anidado.
 
-`retrieve_knowledge` con `scope=code|both` consulta esa colección si existe. Comandos Mac exactos: Project store `docs/mac-runbook.md` (§2).
+`retrieve_knowledge` con `scope=code|both` consulta esa colección si existe. Comandos Mac exactos: Project store `docs/mac-runbook.md` (§2 index-code, §4 index-docs).
 
 ## Layout
 

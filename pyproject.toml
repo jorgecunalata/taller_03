@@ -15,6 +15,7 @@ dependencies = [
     "qdrant-client>=1.15",
     "numpy>=2.0",
     "pypdf>=5.0",
+    "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]
